@@ -1,9 +1,10 @@
 import os
 import re
+import sys
+import subprocess
 import datetime
 import threading
-import subprocess
-import sys as _sys
+import random
 import time as tm
 import pyautogui as pag
 from PyQt5.QtWidgets import (
@@ -16,7 +17,7 @@ from tzlocal import get_localzone
 
 from ui.base_window import BaseWindow
 from core.paths import data_path
-from core.helpers import gui_print, make_sound, add_timezone_to_str
+from core.helpers import gui_print, make_sound, pressing_key, add_timezone_to_str
 from core.globals import (
     main_window, gui_messages_buffer, platform, vk_user_id,
     bot_id, chat_id, logs, my_nickname, using_sounds_in_program,
@@ -25,18 +26,16 @@ from core.globals import (
 )
 from config import VK_TOKEN, TELEGRAM_REDIR_BOT_TOKEN, LOG_CHAT_ID, VERSION
 
-from core.paths import resource_path
-
 from threads.log_monitor import LogMonitorThread
 from threads.message_sender import MessageSenderThread
 from threads.action_threads import (
     MuteActionsThread, WarnActionsThread, KickActionsThread, ScreenshotThread
 )
 from threads.update_downloader import UpdateDownloaderThread
+from updater import check_for_update
 
 
 class MainWindow(BaseWindow):
-
     sound_requested = pyqtSignal()
     screenshot_complete = pyqtSignal(str)
 
@@ -44,7 +43,7 @@ class MainWindow(BaseWindow):
         super().__init__()
 
         try:
-            icon_path = resource_path(os.path.join('path', 'icon.ico'))
+            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'path', 'icon.ico')
             if os.path.exists(icon_path):
                 self.setWindowIcon(QIcon(icon_path))
         except Exception as e:
@@ -76,7 +75,6 @@ class MainWindow(BaseWindow):
         self.current_bind_keycode = None
         self.setting_bind_mode = False
         self.keyboard_listener = None
-        self._update_download_url = ""
 
         self._init_ui()
         self._flush_message_buffer()
@@ -87,12 +85,12 @@ class MainWindow(BaseWindow):
         self._load_bind()
         self._apply_theme(self.current_theme)
         self._load_platform()
+        self._check_update_and_show_button()
 
         self.logs_path = put_do_logov
         self.log_monitor = LogMonitorThread(self.logs_path)
         self.log_monitor.update_signal.connect(self.log_message)
         self.log_monitor.log_line_signal.connect(self.process_log_line)
-        self._check_update_and_show_button()
 
     def _load_theme(self):
         try:
@@ -147,128 +145,22 @@ class MainWindow(BaseWindow):
 
     def _update_theme_specific_styles(self):
         t = self.themes[self.current_theme]
-
-        self.title_label.setStyleSheet(
-            f"font-size: 12px; font-weight: bold; color: {t['text']}; background: transparent; padding: 0px; margin: 0px;"
-        )
-
-        self.log_mode_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {t['secondary']};
-                color: {t['text']};
-                border: none;
-                border-radius: 2px;
-                padding: 4px 8px;
-                font-size: 11px;
-                margin: 0px;
-            }}
-            QPushButton:hover {{ background-color: {t['secondary_hover']}; }}
-            QPushButton:pressed {{ background-color: {t['secondary']}; }}
-        """)
-
-        self.theme_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {t['secondary']};
-                color: {t['text']};
-                border: none;
-                border-radius: 2px;
-                padding: 4px 8px;
-                font-size: 11px;
-                margin: 0px;
-            }}
-            QPushButton:hover {{ background-color: {t['secondary_hover']}; }}
-            QPushButton:pressed {{ background-color: {t['secondary']}; }}
-        """)
-
-        self.update_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {t['primary']};
-                color: white;
-                border: none;
-                border-radius: 2px;
-                padding: 4px 8px;
-                font-size: 11px;
-                margin: 0px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: {t['primary_hover']}; }}
-            QPushButton:pressed {{ background-color: {t['primary_pressed']}; }}
-        """)
-
-        wb = f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {t['text']};
-                border: none;
-                font-size: 16px;
-                font-weight: normal;
-                padding: 0px;
-                margin: 0px;
-            }}
-            QPushButton:hover {{ background-color: {t['secondary_hover']}; }}
-            QPushButton:pressed {{ background-color: {t['secondary']}; }}
-        """
-        cb = f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {t['text']};
-                border: none;
-                font-size: 16px;
-                font-weight: normal;
-                padding: 0px;
-                margin: 0px;
-            }}
-            QPushButton:hover {{ background-color: #FF4757; color: white; }}
-            QPushButton:pressed {{ background-color: #FF3742; }}
-        """
+        self.title_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {t['text']}; background: transparent; padding: 0px; margin: 0px;")
+        self.log_mode_btn.setStyleSheet(f"QPushButton {{ background-color: {t['secondary']}; color: {t['text']}; border: none; border-radius: 2px; padding: 4px 8px; font-size: 11px; margin: 0px; }} QPushButton:hover {{ background-color: {t['secondary_hover']}; }} QPushButton:pressed {{ background-color: {t['secondary']}; }}")
+        self.theme_btn.setStyleSheet(f"QPushButton {{ background-color: {t['secondary']}; color: {t['text']}; border: none; border-radius: 2px; padding: 4px 8px; font-size: 11px; margin: 0px; }} QPushButton:hover {{ background-color: {t['secondary_hover']}; }} QPushButton:pressed {{ background-color: {t['secondary']}; }}")
+        self.update_btn.setStyleSheet(f"QPushButton {{ background-color: {t['primary']}; color: white; border: none; border-radius: 2px; padding: 4px 8px; font-size: 11px; margin: 0px; }} QPushButton:hover {{ background-color: {t['primary_hover']}; }} QPushButton:pressed {{ background-color: {t['primary_pressed']}; }}")
+        wb = f"QPushButton {{ background-color: transparent; color: {t['text']}; border: none; font-size: 16px; font-weight: normal; padding: 0px; margin: 0px; }} QPushButton:hover {{ background-color: {t['secondary_hover']}; }} QPushButton:pressed {{ background-color: {t['secondary']}; }}"
+        cb = f"QPushButton {{ background-color: transparent; color: {t['text']}; border: none; font-size: 16px; font-weight: normal; padding: 0px; margin: 0px; }} QPushButton:hover {{ background-color: #FF4757; color: white; }} QPushButton:pressed {{ background-color: #FF3742; }}"
         self.minimize_btn.setStyleSheet(wb)
         self.maximize_btn.setStyleSheet(wb)
         self.close_btn.setStyleSheet(cb)
-
-        self.bind_label.setStyleSheet(
-            f"font-size: 14px; color: {t['primary']}; padding: 8px; background-color: {t['secondary']}; "
-            f"border-radius: 5px; border: 1px solid {t['secondary_hover']};"
-        )
-
-        ss = (
-            f"font-size: 14px; background-color: {t['secondary']}; padding: 10px; "
-            f"border-radius: 5px; border: 1px solid {t['secondary_hover']}; color: {t['text']};"
-        )
+        self.bind_label.setStyleSheet(f"font-size: 14px; color: {t['primary']}; padding: 8px; background-color: {t['secondary']}; border-radius: 5px; border: 1px solid {t['secondary_hover']};")
+        ss = f"font-size: 14px; background-color: {t['secondary']}; padding: 10px; border-radius: 5px; border: 1px solid {t['secondary_hover']}; color: {t['text']};"
         self.mutes_label.setStyleSheet(ss)
         self.warns_label.setStyleSheet(ss)
         self.kicks_label.setStyleSheet(ss)
-
-        self.session_timer_label.setStyleSheet(
-            f"font-size: 14px; font-weight: bold; color: {t['accent']}; background-color: {t['secondary']}; "
-            f"padding: 8px 12px; border-radius: 8px; border: 1px solid {t['secondary_hover']}; min-width: 120px;"
-        )
-
-        self.log_output.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: {t['secondary']};
-                color: {t['text']};
-                border: 1px solid {t['secondary_hover']};
-                border-radius: 5px;
-                padding: 10px;
-                font-family: 'Cascadia Code', 'Courier New', monospace;
-                font-size: 12px;
-                selection-background-color: {t['primary']};
-            }}
-            QScrollBar:vertical {{
-                border: none;
-                background: {t['secondary']};
-                width: 12px;
-                margin: 0px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {t['secondary_hover']};
-                border-radius: 6px;
-                min-height: 30px;
-            }}
-            QScrollBar::handle:vertical:hover {{ background: {t['primary']}; }}
-            QScrollBar::handle:vertical:pressed {{ background: {t['primary_pressed']}; }}
-        """)
-
+        self.session_timer_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {t['accent']}; background-color: {t['secondary']}; padding: 8px 12px; border-radius: 8px; border: 1px solid {t['secondary_hover']}; min-width: 120px;")
+        self.log_output.setStyleSheet(f"QTextEdit {{ background-color: {t['secondary']}; color: {t['text']}; border: 1px solid {t['secondary_hover']}; border-radius: 5px; padding: 10px; font-family: 'Cascadia Code', 'Courier New', monospace; font-size: 12px; selection-background-color: {t['primary']}; }} QScrollBar:vertical {{ border: none; background: {t['secondary']}; width: 12px; margin: 0px; }} QScrollBar::handle:vertical {{ background: {t['secondary_hover']}; border-radius: 6px; min-height: 30px; }} QScrollBar::handle:vertical:hover {{ background: {t['primary']}; }} QScrollBar::handle:vertical:pressed {{ background: {t['primary_pressed']}; }}")
         self.update()
 
     def paintEvent(self, event):
@@ -277,12 +169,12 @@ class MainWindow(BaseWindow):
         theme = self.themes[self.current_theme]
         painter.setBrush(QBrush(QColor(theme['background'])))
         painter.setPen(Qt.NoPen)
-        painter.drawRoundedRect(QRect(2, 2, self.width() - 4, self.height() - 4), 8, 8)
+        painter.drawRoundedRect(QRect(2, 2, self.width()-4, self.height()-4), 8, 8)
         painter.setBrush(QBrush(QColor(theme['secondary'])))
-        painter.drawRect(QRect(2, 2, self.width() - 4, 35))
+        painter.drawRect(QRect(2, 2, self.width()-4, 35))
         painter.setPen(QPen(QColor(theme['secondary_hover']), 2))
         painter.setBrush(Qt.NoBrush)
-        painter.drawRoundedRect(QRect(1, 1, self.width() - 2, self.height() - 2), 8, 8)
+        painter.drawRoundedRect(QRect(1, 1, self.width()-2, self.height()-2), 8, 8)
 
     def _load_platform(self):
         global platform, vk_user_id
@@ -298,23 +190,21 @@ class MainWindow(BaseWindow):
             gui_print(f"[ERROR] Ошибка загрузки платформы: {e}")
 
     def _check_update_and_show_button(self):
-        from updater import check_for_update
-
         has_update, new_version, download_url = check_for_update()
-        if has_update:
+        if has_update and download_url:
             self.update_btn.setVisible(True)
-            self.update_btn.setText(f"⬇ v{new_version}")
+            self.update_btn.setText(f"v{new_version}")
             self._update_download_url = download_url
             gui_print(f"[SYSTEM] Доступна новая версия: {new_version}")
+        else:
+            self.update_btn.setVisible(False)
 
     def _start_update_download(self):
-        if not self._update_download_url:
+        if not hasattr(self, '_update_download_url') or not self._update_download_url:
             gui_print("[ERROR] Ссылка для скачивания не найдена")
             return
-
         self.update_btn.setEnabled(False)
         self.update_btn.setText("Скачивание...")
-
         self.download_thread = UpdateDownloaderThread(self._update_download_url)
         self.download_thread.progress.connect(self._on_update_progress)
         self.download_thread.finished.connect(self._on_update_downloaded)
@@ -325,37 +215,52 @@ class MainWindow(BaseWindow):
 
     def _on_update_downloaded(self, success, filepath_or_error):
         if success:
-            gui_print(f"[SYSTEM] Обновление скачано: {filepath_or_error}")
+            gui_print(f"[SYSTEM] Обновление скачано")
             self._restart_with_update(filepath_or_error)
         else:
             gui_print(f"[ERROR] Ошибка скачивания обновления: {filepath_or_error}")
             self.update_btn.setEnabled(True)
-            self.update_btn.setText("⬇ Обновить (ошибка)")
+            self.update_btn.setText("Ошибка")
 
     def _restart_with_update(self, new_exe_path):
-        current_exe = _sys.executable
-
-        if not getattr(_sys, 'frozen', False):
-            gui_print("[WARNING] Перезапуск с заменой работает только в .exe")
+        if not getattr(sys, 'frozen', False):
+            gui_print("[WARNING] Автообновление работает только в .exe")
+            gui_print(f"[INFO] Новый файл скачан: {new_exe_path}")
             return
 
-        bat_path = os.path.join(os.path.dirname(current_exe), "update.bat")
-        with open(bat_path, 'w') as f:
+        current_exe = sys.executable
+        current_dir = os.path.dirname(current_exe)
+        final_exe = os.path.join(current_dir, 'HelperTool.exe')
+
+        bat_path = os.path.join(os.environ.get('TEMP', current_dir), 'helpertool_update.bat')
+
+        with open(bat_path, 'w', encoding='utf-8') as f:
             f.write(f'''@echo off
-timeout /t 2 /nobreak >nul
-move /Y "{new_exe_path}" "{current_exe}"
-start "" "{current_exe}"
+chcp 65001 >nul
+taskkill /f /im HelperTool.exe >nul 2>&1
+timeout /t 3 /nobreak >nul
+:retry
+move /Y "{new_exe_path}" "{final_exe}"
+if exist "{new_exe_path}" (
+    timeout /t 2 /nobreak >nul
+    goto retry
+)
+explorer.exe "{final_exe}"
 del "%~f0"
 ''')
 
-        subprocess.Popen(['cmd', '/c', bat_path], shell=True)
-        self.close()
+        subprocess.Popen(
+            ['cmd', '/c', bat_path],
+            shell=True,
+            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == 'win32' else 0
+        )
+
+        os._exit(0)
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(2, 2, 2, 2)
         main_layout.setSpacing(0)
-
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(10, 10, 10, 10)
@@ -382,8 +287,8 @@ del "%~f0"
         self.theme_btn.clicked.connect(self._show_theme_menu)
         title_bar_layout.addWidget(self.theme_btn)
 
-        self.update_btn = QPushButton("⬇ Обновление")
-        self.update_btn.setFixedSize(110, 24)
+        self.update_btn = QPushButton("Обновление")
+        self.update_btn.setFixedSize(100, 24)
         self.update_btn.setToolTip("Скачать новую версию")
         self.update_btn.setVisible(False)
         self.update_btn.clicked.connect(self._start_update_download)
@@ -414,8 +319,8 @@ del "%~f0"
         self.mutes_label = QLabel("Муты: 0")
         self.warns_label = QLabel("Варны: 0")
         self.kicks_label = QLabel("Кики: 0")
-        for lbl in [self.mutes_label, self.warns_label, self.kicks_label]:
-            stats_layout.addWidget(lbl)
+        for l in [self.mutes_label, self.warns_label, self.kicks_label]:
+            stats_layout.addWidget(l)
         top_panel_layout.addLayout(stats_layout)
         top_panel_layout.addStretch()
         self.session_timer_label = QLabel("Сессия: 00:00")
@@ -431,7 +336,6 @@ del "%~f0"
         self.bind_btn = QPushButton("Изменить бинд скриншота")
         self.bind_btn.clicked.connect(self._start_binding)
         buttons_layout.addWidget(self.bind_btn)
-
         self.clear_btn = QPushButton("Очистить логи")
         self.clear_btn.clicked.connect(self._clear_logs)
         buttons_layout.addWidget(self.clear_btn)
@@ -443,25 +347,15 @@ del "%~f0"
         main_layout.addWidget(content_widget)
 
         self.allowed_keys = (
-            list(range(Qt.Key_A, Qt.Key_Z + 1)) +
-            list(range(Qt.Key_0, Qt.Key_9 + 1)) +
-            list(range(Qt.Key_F1, Qt.Key_F24 + 1)) +
-            [
-                Qt.Key_Insert, Qt.Key_Delete, Qt.Key_Home, Qt.Key_End,
-                Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Print, Qt.Key_Pause,
-                Qt.Key_Escape, Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down,
-                Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt, Qt.Key_Meta, Qt.Key_AltGr,
-                Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab, Qt.Key_Backspace,
-                Qt.Key_CapsLock, Qt.Key_NumLock, Qt.Key_ScrollLock, Qt.Key_Menu,
-                Qt.Key_Backtab, Qt.Key_QuoteLeft, Qt.Key_Backslash,
-                Qt.Key_BracketLeft, Qt.Key_BracketRight, Qt.Key_Semicolon,
-                Qt.Key_Apostrophe, Qt.Key_Comma, Qt.Key_Period, Qt.Key_Slash,
-                Qt.Key_Equal, Qt.Key_Minus, Qt.Key_AsciiTilde, Qt.Key_Exclam,
-                Qt.Key_At, Qt.Key_NumberSign, Qt.Key_Dollar, Qt.Key_Percent,
-                Qt.Key_Ampersand, Qt.Key_Asterisk, Qt.Key_Plus, Qt.Key_Less,
-                Qt.Key_Greater, Qt.Key_Underscore, Qt.Key_Question,
-                Qt.Key_ParenLeft, Qt.Key_ParenRight
-            ]
+            list(range(Qt.Key_A, Qt.Key_Z + 1)) + list(range(Qt.Key_0, Qt.Key_9 + 1)) + list(range(Qt.Key_F1, Qt.Key_F24 + 1)) +
+            [Qt.Key_Insert, Qt.Key_Delete, Qt.Key_Home, Qt.Key_End, Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Print, Qt.Key_Pause,
+             Qt.Key_Escape, Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down, Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt,
+             Qt.Key_Meta, Qt.Key_AltGr, Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab, Qt.Key_Backspace,
+             Qt.Key_CapsLock, Qt.Key_NumLock, Qt.Key_ScrollLock, Qt.Key_Menu, Qt.Key_Backtab, Qt.Key_QuoteLeft,
+             Qt.Key_Backslash, Qt.Key_BracketLeft, Qt.Key_BracketRight, Qt.Key_Semicolon, Qt.Key_Apostrophe, Qt.Key_Comma,
+             Qt.Key_Period, Qt.Key_Slash, Qt.Key_Equal, Qt.Key_Minus, Qt.Key_AsciiTilde, Qt.Key_Exclam, Qt.Key_At,
+             Qt.Key_NumberSign, Qt.Key_Dollar, Qt.Key_Percent, Qt.Key_Ampersand, Qt.Key_Asterisk, Qt.Key_Plus, Qt.Key_Less,
+             Qt.Key_Greater, Qt.Key_Underscore, Qt.Key_Question, Qt.Key_ParenLeft, Qt.Key_ParenRight]
         )
         self._update_log_mode_btn_style()
 
@@ -469,10 +363,7 @@ del "%~f0"
         global log_display_mode
         self.filter_new_messages = (log_display_mode == 'chat')
         self._update_log_mode_btn_style()
-        self.log_message(
-            f"[SYSTEM] Режим отображения новых логов: "
-            f"{'Только чат' if self.filter_new_messages else 'Все логи'}"
-        )
+        self.log_message(f"[SYSTEM] Режим отображения новых логов: {'Только чат' if self.filter_new_messages else 'Все логи'}")
 
     def _flush_message_buffer(self):
         global gui_messages_buffer
@@ -506,16 +397,11 @@ del "%~f0"
         self.filter_new_messages = (log_display_mode == 'chat')
         self._update_log_mode_btn_style()
         self._save_log_display_mode()
-        gui_print(
-            f"[SYSTEM] Режим логов: "
-            f"{'Только чат' if self.filter_new_messages else 'Все логи'}"
-        )
+        gui_print(f"[SYSTEM] Режим логов: {'Только чат' if self.filter_new_messages else 'Все логи'}")
 
     def _update_log_mode_btn_style(self):
         if hasattr(self, 'log_mode_btn'):
-            self.log_mode_btn.setText(
-                "Все логи" if log_display_mode == 'all' else "Только чат"
-            )
+            self.log_mode_btn.setText("Все логи" if log_display_mode == 'all' else "Только чат")
 
     def _save_log_display_mode(self):
         global log_display_mode
@@ -569,10 +455,7 @@ del "%~f0"
             elif "[SYSTEM]" in message:
                 cm = f'<span style="color: {t["accent"]}; font-weight: bold;">{message}</span>'
             elif "[CHAT]" in message:
-                cm = (
-                    f'<span style="color: {t["chat"]}; font-weight: bold; '
-                    f'text-shadow: 0 0 2px rgba(255,255,255,0.3);">{message}</span>'
-                )
+                cm = f'<span style="color: {t["chat"]}; font-weight: bold; text-shadow: 0 0 2px rgba(255,255,255,0.3);">{message}</span>'
             else:
                 cm = f'<span style="color: {t["text"]};">{message}</span>'
         sb = self.log_output.verticalScrollBar()
@@ -612,10 +495,7 @@ del "%~f0"
                 elif "[SYSTEM]" in line:
                     cm = f'<span style="color: {t["accent"]}; font-weight: bold;">{line}</span>'
                 elif "[CHAT]" in line:
-                    cm = (
-                        f'<span style="color: {t["chat"]}; font-weight: bold; '
-                        f'text-shadow: 0 0 2px rgba(255,255,255,0.3);">{line}</span>'
-                    )
+                    cm = f'<span style="color: {t["chat"]}; font-weight: bold; text-shadow: 0 0 2px rgba(255,255,255,0.3);">{line}</span>'
                 else:
                     cm = f'<span style="color: {t["text"]};">{line}</span>'
             self.log_output.append(cm)
@@ -631,83 +511,51 @@ del "%~f0"
         if not self.filter_new_messages or '[CHAT]' in line:
             self.log_message(line)
         try:
+            escaped_nick = re.escape(my_nickname)
+
             mute_pattern = (
-                r'㰳\s+(\S+)\s+(\S+)\s+(' + re.escape(my_nickname) +
-                r')\s+замутил\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
+                r'㰳\s+(\S+)\s+(\S+)\s+(' + escaped_nick + r')\S*\s+замутил\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
             )
             mute_match = re.search(mute_pattern, line)
             if mute_match:
-                if mute_match.group(5):
-                    temp_nick = mute_match.group(4) + ' ┃ <code>' + mute_match.group(5) + '</code>'
-                else:
-                    temp_nick = '<code>' + mute_match.group(4) + '</code>'
-                my_full_nickname = (
-                    mute_match.group(1) + ' ' + mute_match.group(2) +
-                    ' <code>' + mute_match.group(3) + '</code>'
-                )
+                temp_nick = mute_match.group(4) + ' ┃ ' + '<code>' + mute_match.group(5) + '</code>' if mute_match.group(5) else '<code>' + mute_match.group(4) + '</code>'
+                my_full_nickname = mute_match.group(1) + ' ' + mute_match.group(2) + ' ' + '<code>' + mute_match.group(3) + '</code>'
                 previous_sender = line
-                self._add_to_queue('mute', {
-                    'line': line, 'my_full_nickname': my_full_nickname,
-                    'temp_nick': temp_nick, 'warns': mute_match.group(6)
-                })
+                self._add_to_queue('mute', {'line': line, 'my_full_nickname': my_full_nickname, 'temp_nick': temp_nick, 'warns': mute_match.group(6)})
                 return
 
             warn_pattern = (
-                r'(\S+)\s+(\S+)\s+(' + re.escape(my_nickname) +
-                r')\s+предупредил\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
+                r'(\S+)\s+(\S+)\s+(' + escaped_nick + r')\S*\s+предупредил\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
             )
             warn_match = re.search(warn_pattern, line)
             if warn_match:
-                if warn_match.group(5):
-                    tempo_nick = warn_match.group(5).rstrip(".")
-                    temp_nick = warn_match.group(4) + ' ┃ <code>' + tempo_nick + '</code>'
-                else:
-                    temp_nick = '<code>' + warn_match.group(4).rstrip(".") + '</code>'
-                my_full_nickname = (
-                    warn_match.group(1) + ' ' + warn_match.group(2) +
-                    ' <code>' + warn_match.group(3) + '</code>'
-                )
+                tempo_nick = (warn_match.group(5)).rstrip(".") if warn_match.group(5) else (warn_match.group(4)).rstrip(".")
+                temp_nick = warn_match.group(4) + ' ┃ ' + '<code>' + tempo_nick + '</code>' if warn_match.group(5) else '<code>' + tempo_nick + '</code>'
+                my_full_nickname = warn_match.group(1) + ' ' + warn_match.group(2) + ' ' + '<code>' + warn_match.group(3) + '</code>'
                 previous_sender = line
-                self._add_to_queue('warn', {
-                    'line': line, 'my_full_nickname': my_full_nickname,
-                    'temp_nick': temp_nick, 'warns': warn_match.group(6)
-                })
+                self._add_to_queue('warn', {'line': line, 'my_full_nickname': my_full_nickname, 'temp_nick': temp_nick, 'warns': warn_match.group(6)})
                 return
 
             kick_pattern = (
-                r'㰳\s+(\S+)\s+(\S+)\s+(' + re.escape(my_nickname) +
-                r')\s+кикнул\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
+                r'㰳\s+(\S+)\s+(\S+)\s+(' + escaped_nick + r')\S*\s+кикнул\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
             )
             kick_match = re.search(kick_pattern, line)
             if kick_match:
-                if kick_match.group(5):
-                    temp_nick = kick_match.group(4) + ' ┃ <code>' + kick_match.group(5) + '</code>'
-                else:
-                    temp_nick = '<code>' + kick_match.group(4) + '</code>'
-                my_full_nickname = (
-                    kick_match.group(1) + ' ' + kick_match.group(2) +
-                    ' <code>' + kick_match.group(3) + '</code>'
-                )
+                temp_nick = kick_match.group(4) + ' ┃ ' + '<code>' + kick_match.group(5) + '</code>' if kick_match.group(5) else '<code>' + kick_match.group(4) + '</code>'
+                my_full_nickname = kick_match.group(1) + ' ' + kick_match.group(2) + ' ' + '<code>' + kick_match.group(3) + '</code>'
                 previous_sender = line
                 current_date = datetime.datetime.now(get_localzone()).strftime("%d.%m.%Y")
                 time_match = re.search(r'\[(\d{2}:\d{2}:\d{2})', line)
                 timesi = time_match.group(1) if time_match else "00:00:00"
                 last_time = add_timezone_to_str(timesi)
-                self._add_to_queue('kick', {
-                    'my_full_nickname': my_full_nickname, 'temp_nick': temp_nick,
-                    'warns': kick_match.group(6), 'current_date': current_date,
-                    'last_time': last_time
-                })
+                self._add_to_queue('kick', {'my_full_nickname': my_full_nickname, 'temp_nick': temp_nick, 'warns': kick_match.group(6), 'current_date': current_date, 'last_time': last_time})
                 return
-
         except Exception as e:
             self.log_message(f"[ERROR] Ошибка при обработке строки '{line}': {e}")
 
     def _add_to_queue(self, ot, data):
         with self.operation_lock:
-            self.operation_queue.append({
-                'type': ot, 'data': data, 'timestamp': datetime.datetime.now()
-            })
+            self.operation_queue.append({'type': ot, 'data': data, 'timestamp': datetime.datetime.now()})
         if self.current_operation is None:
             self._process_next_operation()
 
@@ -718,33 +566,20 @@ del "%~f0"
             self.current_operation = self.operation_queue.pop(0)
         if self.current_operation:
             op = self.current_operation
-            QTimer.singleShot(
-                int(self.processing_delay * 1000),
-                lambda: self._start_operation(op)
-            )
+            QTimer.singleShot(int(self.processing_delay * 1000), lambda: self._start_operation(op))
 
     def _start_operation(self, op):
         try:
             if op['type'] == 'mute':
-                self.mute_thread = MuteActionsThread(
-                    op['data']['line'], op['data']['my_full_nickname'],
-                    op['data']['temp_nick'], op['data']['warns']
-                )
+                self.mute_thread = MuteActionsThread(op['data']['line'], op['data']['my_full_nickname'], op['data']['temp_nick'], op['data']['warns'])
                 self.mute_thread.finished_signal.connect(self._on_mute_finished)
                 self.mute_thread.start()
             elif op['type'] == 'warn':
-                self.warn_thread = WarnActionsThread(
-                    op['data']['line'], op['data']['my_full_nickname'],
-                    op['data']['temp_nick'], op['data']['warns']
-                )
+                self.warn_thread = WarnActionsThread(op['data']['line'], op['data']['my_full_nickname'], op['data']['temp_nick'], op['data']['warns'])
                 self.warn_thread.finished_signal.connect(self._on_warn_finished)
                 self.warn_thread.start()
             elif op['type'] == 'kick':
-                self.kick_thread = KickActionsThread(
-                    op['data']['my_full_nickname'], op['data']['temp_nick'],
-                    op['data']['warns'], op['data']['current_date'],
-                    op['data']['last_time']
-                )
+                self.kick_thread = KickActionsThread(op['data']['my_full_nickname'], op['data']['temp_nick'], op['data']['warns'], op['data']['current_date'], op['data']['last_time'])
                 self.kick_thread.finished_signal.connect(self._on_kick_finished)
                 self.kick_thread.start()
         except Exception as e:
@@ -758,9 +593,7 @@ del "%~f0"
         if using_sounds_in_program:
             self.sound_requested.emit()
         self.message_sender = MessageSenderThread('mute', platform, vk_user_id, *args)
-        self.message_sender.finished_signal.connect(
-            lambda s, m: self._on_message_sent(s, m, 'mute')
-        )
+        self.message_sender.finished_signal.connect(lambda s, m: self._on_message_sent(s, m, 'mute'))
         self.message_sender.start()
 
     def _on_warn_finished(self, *args):
@@ -770,9 +603,7 @@ del "%~f0"
         if using_sounds_in_program:
             self.sound_requested.emit()
         self.message_sender = MessageSenderThread('warn', platform, vk_user_id, *args)
-        self.message_sender.finished_signal.connect(
-            lambda s, m: self._on_message_sent(s, m, 'warn')
-        )
+        self.message_sender.finished_signal.connect(lambda s, m: self._on_message_sent(s, m, 'warn'))
         self.message_sender.start()
 
     def _on_kick_finished(self, *args):
@@ -780,9 +611,7 @@ del "%~f0"
         all_kicks += 1
         self.update_stats()
         self.message_sender = MessageSenderThread('kick', platform, vk_user_id, *args)
-        self.message_sender.finished_signal.connect(
-            lambda s, m: self._on_message_sent(s, m, 'kick')
-        )
+        self.message_sender.finished_signal.connect(lambda s, m: self._on_message_sent(s, m, 'kick'))
         self.message_sender.start()
 
     def _on_message_sent(self, success, message, operation_type):
@@ -828,10 +657,7 @@ del "%~f0"
     def keyPressEvent(self, event):
         if self.setting_bind_mode:
             key = event.key()
-            if key in [
-                Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt, Qt.Key_Meta,
-                Qt.Key_CapsLock, Qt.Key_NumLock, Qt.Key_ScrollLock
-            ]:
+            if key in [Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt, Qt.Key_Meta, Qt.Key_CapsLock, Qt.Key_NumLock, Qt.Key_ScrollLock]:
                 event.accept()
                 return
             if key in self.allowed_keys:
@@ -881,9 +707,7 @@ del "%~f0"
                                 QTimer.singleShot(0, self.take_screenshot)
                         except Exception:
                             pass
-                    self.keyboard_listener = pynput_kb.Listener(
-                        on_press=on_press, suppress=False
-                    )
+                    self.keyboard_listener = pynput_kb.Listener(on_press=on_press, suppress=False)
                     self.keyboard_listener.start()
         except Exception as e:
             gui_print(f"[ERROR] Ошибка настройки горячей клавиши: {e}")
