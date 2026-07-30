@@ -237,14 +237,19 @@ class MainWindow(BaseWindow):
         with open(bat_path, 'w', encoding='utf-8') as f:
             f.write(f'''@echo off
 chcp 65001 >nul
+echo Обновление HelperTool...
+echo Закрытие старой версии...
 taskkill /f /im HelperTool.exe >nul 2>&1
 timeout /t 3 /nobreak >nul
+echo Установка обновления...
 :retry
 move /Y "{new_exe_path}" "{final_exe}"
 if exist "{new_exe_path}" (
+    echo Файл занят, повтор...
     timeout /t 2 /nobreak >nul
     goto retry
 )
+echo Запуск...
 explorer.exe "{final_exe}"
 del "%~f0"
 ''')
@@ -513,8 +518,11 @@ del "%~f0"
         try:
             escaped_nick = re.escape(my_nickname)
 
+            tag_tail = r'\S*(?:\s+\S+)*'
+
             mute_pattern = (
-                r'㰳\s+(\S+)\s+(\S+)\s+(' + escaped_nick + r')\S*\s+замутил\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
+                r'㰳\s+(\S+)\s+(\S+)\s+(' + escaped_nick + r')' + tag_tail +
+                r'\s+замутил\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
             )
             mute_match = re.search(mute_pattern, line)
             if mute_match:
@@ -525,7 +533,8 @@ del "%~f0"
                 return
 
             warn_pattern = (
-                r'(\S+)\s+(\S+)\s+(' + escaped_nick + r')\S*\s+предупредил\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
+                r'(\S+)\s+(\S+)\s+(' + escaped_nick + r')' + tag_tail +
+                r'\s+предупредил\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
             )
             warn_match = re.search(warn_pattern, line)
             if warn_match:
@@ -537,7 +546,8 @@ del "%~f0"
                 return
 
             kick_pattern = (
-                r'㰳\s+(\S+)\s+(\S+)\s+(' + escaped_nick + r')\S*\s+кикнул\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
+                r'㰳\s+(\S+)\s+(\S+)\s+(' + escaped_nick + r')' + tag_tail +
+                r'\s+кикнул\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
             )
             kick_match = re.search(kick_pattern, line)
             if kick_match:

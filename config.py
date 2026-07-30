@@ -5,7 +5,7 @@ _TOKEN_ENCRYPTION_KEY = b'8XRzF52TJujTntIWmhgBc4Q9rzdLOPSoszmSwv3NDJA='
 
 _TOKENS_FILE_ID = '1BEukNWcT9lmZr2KvoLOo449rMbHbvgFA'
 
-VERSION = "2.2.1"
+VERSION = "2.2.2"
 GITHUB_REPO = "NaGiNaT/HelperTool-Public"
 
 VK_TOKEN = ""
