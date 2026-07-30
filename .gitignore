@@ -1,0 +1,11 @@
+.env
+start.bat
+build.bat
+encrypt_google_key.py
+README.txt
+__pycache__/
+*.pyc
+data/
+dist/
+build/
+*.spec
