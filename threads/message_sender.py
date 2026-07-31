@@ -8,14 +8,13 @@ from vk_api.utils import get_random_id
 
 from config import VK_TOKEN, TELEGRAM_REDIR_BOT_TOKEN, LOG_CHAT_ID
 from core.paths import data_path
-from core.globals import vk_user_id, chat_id, platform
+from core.globals import vk_user_id, chat_id, platform, bot_id
 
 
 class MessageSenderThread(QThread):
-
     finished_signal = pyqtSignal(bool, str)
 
-    def __init__(self, send_type: str, platform: str, *args):
+    def __init__(self, send_type, platform, *args):
         super().__init__()
         self.send_type = send_type
         self.platform = platform
@@ -177,12 +176,11 @@ class MessageSenderThread(QThread):
                     tm.sleep(1)
 
     def _send_screenshot_telegram(self, filename):
-        global chat_id
         for attempt in range(1, 4):
             if self.should_stop:
                 return
             try:
-                bot = telebot.TeleBot(str(chat_id))
+                bot = telebot.TeleBot(str(bot_id))
                 with open(filename, 'rb') as photo_file:
                     bot.send_photo(int(chat_id), photo_file, '<em>С любовью, NaGiNaT❤️</em>', parse_mode='html')
                 try:
@@ -202,7 +200,6 @@ class MessageSenderThread(QThread):
                     tm.sleep(2)
 
     def _init_vk_api(self):
-        """Инициализирует VK API с токеном бота"""
         try:
             vk_session = vk_api.VkApi(token=VK_TOKEN)
             vk = vk_session.get_api()
@@ -211,7 +208,6 @@ class MessageSenderThread(QThread):
             raise Exception(f"Ошибка инициализации VK API: {e}")
 
     def _get_vk_user_id(self):
-        """Безопасно получает vk_user_id из глобальной переменной или из config.yml"""
         global vk_user_id
         if not vk_user_id:
             try:
