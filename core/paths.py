@@ -13,6 +13,8 @@ def _get_data_dir():
 
 
 DATA_DIR = _get_data_dir()
+SCREENSHOTS_DIR = os.path.join(DATA_DIR, 'screenshots')
+DB_PATH = os.path.join(DATA_DIR, 'helpertool.db')
 
 
 def resource_path(relative_path):
@@ -24,10 +26,16 @@ def resource_path(relative_path):
 
 
 def ensure_data_dir():
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-        print(f"[SYSTEM] Создана папка настроек: {DATA_DIR}")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 
 def data_path(filename: str) -> str:
     return os.path.join(DATA_DIR, filename)
+
+
+def screenshot_path(photoid_or_filename: str) -> str:
+    name = photoid_or_filename
+    if not str(name).lower().endswith('.png'):
+        name = f'screenshot_{name}.png'
+    return os.path.join(SCREENSHOTS_DIR, name)

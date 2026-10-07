@@ -3,20 +3,18 @@ import sys
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QCheckBox, QStackedWidget,
-    QProgressBar, QSlider, QFileDialog
+    QProgressBar, QSlider, QFileDialog, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QRect, QTimer
-from PyQt5.QtGui import QPainter, QBrush, QColor, QPen, QMouseEvent, QIcon
+from PyQt5.QtCore import Qt, QRectF, QTimer, QPointF
+from PyQt5.QtGui import QPainter, QColor, QPen, QIcon, QImage, QPainterPath
 
 from ui.base_window import BaseWindow
-from core.paths import data_path
-from core.globals import (
-    bot_id, chat_id, logs, my_nickname, platform, vk_user_id,
-    screenshot_delay, using_sounds_in_program, log_display_mode
-)
-from core.helpers import gui_print, create_empty_config
+from ui.title_bar import TitleBar
+from ui.theme_manager import THEMES, checkbox_style, field_label_style, slider_style
+from core.settings import load_settings, save_settings, update_settings
+from core.helpers import gui_print
 from threads.validation import ValidationThread
-from core.paths import resource_path
+from core.paths import resource_path, data_path
 
 
 class SetupWindow(BaseWindow):
@@ -31,14 +29,10 @@ class SetupWindow(BaseWindow):
         except Exception as e:
             print(f"Не удалось установить иконку для SetupWindow: {e}")
 
-        self.themes = {
-            "Dark Orange": {"primary": "#FF7F50", "primary_hover": "#FF9D7A", "primary_pressed": "#E67A5D", "background": "#2B2C34", "secondary": "#45475A", "secondary_hover": "#585B70", "text": "#CDD6F4", "text_secondary": "#A6ADC8", "accent": "#94E2D5", "error": "#F38BA8", "warning": "#F9E2AF", "success": "#A6E3A1", "chat": "#CDD6F4"},
-            "Dark Blue": {"primary": "#89B4FA", "primary_hover": "#A6C8FF", "primary_pressed": "#74A7F7", "background": "#1E1E2E", "secondary": "#313244", "secondary_hover": "#45475A", "text": "#CDD6F4", "text_secondary": "#A6ADC8", "accent": "#74C7EC", "error": "#F38BA8", "warning": "#F9E2AF", "success": "#A6E3A1", "chat": "#CDD6F4"},
-            "Light White": {"primary": "#2563EB", "primary_hover": "#3B82F6", "primary_pressed": "#1D4ED8", "background": "#FFFFFF", "secondary": "#F8FAFC", "secondary_hover": "#F1F5F9", "text": "#1E293B", "text_secondary": "#475569", "accent": "#0369A1", "error": "#DC2626", "warning": "#EA580C", "success": "#16A34A", "chat": "#1E293B"},
-            "Purple": {"primary": "#CBA6F7", "primary_hover": "#D9BBF9", "primary_pressed": "#BB90F4", "background": "#1A1B26", "secondary": "#343B58", "secondary_hover": "#444B73", "text": "#C0CAF5", "text_secondary": "#A9B1D6", "accent": "#7AA2F7", "error": "#F7768E", "warning": "#E0AF68", "success": "#9ECE6A", "chat": "#C0CAF5"}
-        }
+        self.themes = THEMES
 
-        self.setGeometry(100, 100, 900, 700)
+        self.setMinimumSize(780, 680)
+        self.resize(900, 840)
         self.current_theme = self._load_theme()
         self.setStyleSheet(self._get_theme_stylesheet())
 
@@ -64,29 +58,18 @@ class SetupWindow(BaseWindow):
         self._update_theme_specific_styles()
         self._load_verification_info()
 
-        self.setFixedSize(900, 840)
-
-        self.vk_id_input.setMinimumWidth(250)
-        self.bot_id_input.setMinimumWidth(250)
-        self.tg_id_input.setMinimumWidth(250)
-        self.vk_widget.setMinimumWidth(440)
-
         QTimer.singleShot(100, lambda: self._on_platform_changed(self.platform_combo.currentText()))
 
     def _load_theme(self):
-        try:
-            with open(data_path('theme.txt'), 'r') as f:
-                saved_theme = f.read().strip()
-                if saved_theme in self.themes:
-                    return saved_theme
-        except FileNotFoundError:
-            pass
+        theme = load_settings().theme
+        if theme in self.themes:
+            return theme
         return "Dark Orange"
 
     def _get_theme_stylesheet(self):
         theme = self.themes.get(self.current_theme, self.themes["Dark Orange"])
         return f"""
-        QWidget {{ background-color: {theme['background']}; color: {theme['text']}; font-family: 'Segoe UI', Arial; }}
+        QWidget {{ background: transparent; color: {theme['text']}; font-family: 'Segoe UI', Arial; }}
         QLineEdit, QComboBox {{ background-color: {theme['secondary']}; color: {theme['text']}; border: 1px solid {theme['secondary_hover']}; border-radius: 5px; padding: 8px; font-size: 12px; min-width: 200px; }}
         QLineEdit:focus, QComboBox:focus {{ border: 2px solid {theme['primary']}; }}
         QLabel {{ color: {theme['text']}; padding: 5px; min-width: 100px; font-size: 14px; font-weight: bold; background: transparent; }}
@@ -104,70 +87,192 @@ class SetupWindow(BaseWindow):
         """
 
     def _update_theme_specific_styles(self):
-        theme = self.themes[self.current_theme]
-        window_buttons_style = f'''QPushButton {{ background-color: transparent; color: {theme['text']}; border: none; font-size: 16px; font-weight: normal; padding: 0px; margin: 0px; }} QPushButton:hover {{ background-color: {theme['secondary_hover']}; }} QPushButton:pressed {{ background-color: {theme['secondary']}; }}'''
-        close_button_style = f'''QPushButton {{ background-color: transparent; color: {theme['text']}; border: none; font-size: 16px; font-weight: normal; padding: 0px; margin: 0px; }} QPushButton:hover {{ background-color: #FF4757; color: white; }} QPushButton:pressed {{ background-color: #FF3742; }}'''
-        self.minimize_btn.setStyleSheet(window_buttons_style)
-        self.maximize_btn.setStyleSheet(window_buttons_style)
-        self.close_btn.setStyleSheet(close_button_style)
+        if hasattr(self, 'title_bar'):
+            self.title_bar.apply_theme(self.current_theme)
+        if hasattr(self, 'loading_title'):
+            self.loading_title.apply_theme(self.current_theme)
         self._update_delay_slider_style()
         self.update()
 
+    def _slider_stylesheet(self) -> str:
+        return slider_style(self.current_theme)
+
+    def _combo_arrow_url(self) -> str:
+        theme = self.themes[self.current_theme]
+        path = data_path('combo_arrow.png')
+        image = QImage(16, 16, QImage.Format_ARGB32)
+        image.fill(0)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor(theme['text']))
+        pen.setWidth(2)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.drawLine(QPointF(3, 5), QPointF(8, 10))
+        painter.drawLine(QPointF(8, 10), QPointF(13, 5))
+        painter.end()
+        image.save(path)
+        return path.replace('\\', '/')
+
     def _update_delay_slider_style(self):
         if hasattr(self, 'delay_slider') and self.delay_slider is not None:
-            self.delay_slider.setStyleSheet(f"""QSlider {{ background: transparent; }} QSlider::groove:horizontal {{ border: none; height: 6px; background: {self.themes[self.current_theme]['secondary']}; border-radius: 3px; }} QSlider::handle:horizontal {{ background: {self.themes[self.current_theme]['primary']}; border: none; width: 18px; height: 18px; margin: -6px 0; border-radius: 9px; }} QSlider::handle:horizontal:hover {{ background: {self.themes[self.current_theme]['primary_hover']}; }} QSlider::handle:horizontal:pressed {{ background: {self.themes[self.current_theme]['primary_pressed']}; }} QSlider::tick:horizontal {{ background: {self.themes[self.current_theme]['secondary_hover']}; }}""")
+            self.delay_slider.setStyleSheet(self._slider_stylesheet())
         if hasattr(self, 'delay_value_label') and self.delay_value_label is not None:
             self.delay_value_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {self.themes[self.current_theme]['primary']}; background: transparent;")
         if hasattr(self, 'sound_checkbox') and self.sound_checkbox is not None:
-            self.sound_checkbox.setStyleSheet(f"""QCheckBox {{ color: {self.themes[self.current_theme]['text']}; font-size: 14px; font-weight: normal; background: transparent; spacing: 8px; }} QCheckBox::indicator {{ width: 18px; height: 18px; border: 2px solid {self.themes[self.current_theme]['secondary_hover']}; border-radius: 4px; background: {self.themes[self.current_theme]['secondary']}; }} QCheckBox::indicator:checked {{ background: {self.themes[self.current_theme]['primary']}; border-color: {self.themes[self.current_theme]['primary']}; }} QCheckBox::indicator:hover {{ border: 2px solid {self.themes[self.current_theme]['primary_hover']}; }}""")
+            self.sound_checkbox.setStyleSheet(checkbox_style(self.current_theme))
+
+    def _field_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setFixedSize(132, 32)
+        label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        label.setStyleSheet(field_label_style(self.current_theme))
+        return label
+
+    def _field_row(self, label_text: str, field) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        row.addWidget(self._field_label(label_text))
+        field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        field.setFixedHeight(32)
+        row.addWidget(field, 1)
+        return row
 
     def _get_content_frame_stylesheet(self):
         theme = self.themes.get(self.current_theme, self.themes["Dark Orange"])
         return f"""
-        QWidget {{ background-color: {theme['secondary']}; border: 2px solid {theme['secondary_hover']}; border-radius: 15px; padding: 0px; margin: 0px; }}
-        QLabel {{ color: {theme['text']}; background: transparent; font-size: 14px; font-weight: bold; }}
-        QLineEdit, QComboBox {{ background-color: {theme['background']}; color: {theme['text']}; border: 1px solid {theme['secondary_hover']}; border-radius: 8px; padding: 8px 12px; font-size: 12px; min-height: 25px; }}
-        QLineEdit:focus, QComboBox:focus {{ border: 2px solid {theme['primary']}; background-color: {theme['background']}; }}
-        QPushButton {{ background-color: {theme['primary']}; color: white; border: none; border-radius: 8px; padding: 10px; font-size: 14px; font-weight: bold; min-height: 25px; }}
+        QWidget#configCard {{
+            background-color: {theme['secondary']};
+            border: 2px solid {theme['secondary_hover']};
+            border-radius: 15px;
+        }}
+        QWidget#fieldHost {{
+            background: transparent;
+            border: none;
+        }}
+        QLabel#configHeader {{
+            color: {theme['text']};
+            background: transparent;
+            border: 2px solid {theme['secondary_hover']};
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: bold;
+            padding: 14px 20px;
+        }}
+        QLabel {{
+            color: {theme['text']};
+            background: transparent;
+            border: none;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 0px;
+            margin: 0px;
+        }}
+        QLineEdit {{
+            background-color: {theme['background']};
+            color: {theme['text']};
+            border: 1px solid {theme['secondary_hover']};
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 13px;
+            min-height: 32px;
+            max-height: 32px;
+        }}
+        QLineEdit:focus {{
+            border: 2px solid {theme['primary']};
+        }}
+        QComboBox {{
+            background-color: {theme['background']};
+            color: {theme['text']};
+            border: 1px solid {theme['secondary_hover']};
+            border-radius: 6px;
+            padding: 4px 8px 4px 10px;
+            font-size: 13px;
+            min-height: 32px;
+            max-height: 32px;
+        }}
+        QComboBox:focus, QComboBox:on {{
+            border: 2px solid {theme['primary']};
+        }}
+        QComboBox::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: center right;
+            width: 22px;
+            border: none;
+            background: transparent;
+        }}
+        QComboBox::down-arrow {{
+            image: url({self._combo_arrow_url()});
+            width: 12px;
+            height: 12px;
+        }}
+        QComboBox QAbstractItemView {{
+            background-color: {theme['background']};
+            color: {theme['text']};
+            border: 1px solid {theme['primary']};
+            selection-background-color: {theme['primary']};
+            outline: none;
+        }}
+        QPushButton {{
+            background-color: {theme['primary']};
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 14px;
+            font-weight: bold;
+            min-height: 25px;
+        }}
         QPushButton:hover {{ background-color: {theme['primary_hover']}; }}
         QPushButton:pressed {{ background-color: {theme['primary_pressed']}; }}
-        QPushButton:checked {{ background-color: {theme['accent']}; }}
-        QCheckBox {{ color: {theme['text']}; spacing: 8px; background: transparent; font-size: 14px; }}
-        QCheckBox::indicator {{ width: 18px; height: 18px; border: 2px solid {theme['secondary_hover']}; border-radius: 4px; background: {theme['background']}; }}
-        QCheckBox::indicator:checked {{ background: {theme['primary']}; border-color: {theme['primary']}; }}
+        QCheckBox {{
+            color: {theme['text']};
+            spacing: 8px;
+            background: transparent;
+            border: none;
+            font-size: 14px;
+        }}
+        QCheckBox::indicator {{
+            width: 18px;
+            height: 18px;
+            border: 2px solid {theme['secondary_hover']};
+            border-radius: 4px;
+            background: {theme['background']};
+        }}
+        QCheckBox::indicator:checked {{
+            background: {theme['primary']};
+            border-color: {theme['primary']};
+        }}
         """
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         theme = self.themes[self.current_theme]
-        painter.setBrush(QBrush(QColor(theme['background'])))
-        painter.setPen(Qt.NoPen)
-        painter.drawRoundedRect(QRect(2, 2, self.width()-4, self.height()-4), 8, 8)
-        painter.setBrush(QBrush(QColor(theme['secondary'])))
-        painter.drawRect(QRect(2, 2, self.width()-4, 35))
+        frame = QRectF(self.rect().adjusted(1, 1, -1, -1))
+        clip = QPainterPath()
+        clip.addRoundedRect(frame, 8, 8)
+        painter.setClipPath(clip)
+        painter.fillRect(frame, QColor(theme['background']))
+        painter.fillRect(QRectF(frame.x(), frame.y(), frame.width(), 35), QColor(theme['secondary']))
+        painter.setClipping(False)
         painter.setPen(QPen(QColor(theme['secondary_hover']), 2))
         painter.setBrush(Qt.NoBrush)
-        painter.drawRoundedRect(QRect(1, 1, self.width()-2, self.height()-2), 8, 8)
+        painter.drawRoundedRect(frame, 8, 8)
 
     def _load_verification_info(self):
         try:
-            path = data_path('verified_settings.txt')
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.startswith('bot_id:'):
-                            self.verified_bot_id = line.split(':', 1)[1].strip()
-                        elif line.startswith('chat_id:'):
-                            self.verified_chat_id = line.split(':', 1)[1].strip()
+            settings = load_settings()
+            self.verified_bot_id = settings.verified_bot_id or None
+            self.verified_chat_id = settings.verified_chat_id or None
         except Exception as e:
             print(f"Ошибка загрузки verified_settings: {e}")
 
     def save_verification_info(self, bot_id_val, chat_id_val):
         try:
-            with open(data_path('verified_settings.txt'), 'w', encoding='utf-8') as f:
-                f.write(f"bot_id:{bot_id_val}\n")
-                f.write(f"chat_id:{chat_id_val}\n")
+            update_settings(verified_bot_id=bot_id_val, verified_chat_id=chat_id_val)
             self.verified_bot_id = bot_id_val
             self.verified_chat_id = chat_id_val
         except Exception as e:
@@ -175,21 +280,11 @@ class SetupWindow(BaseWindow):
 
     def _load_existing_config(self):
         try:
-            path = data_path('config.yml')
-            if not os.path.exists(path):
-                return
-            with open(path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            config_data = {}
-            for line in lines:
-                line = line.strip()
-                if ':' in line:
-                    key, value = line.split(':', 1)
-                    config_data[key.strip()] = value.strip()
-            if config_data.get('nick'):
-                self.nick_input.setText(config_data['nick'])
-            if 'logs' in config_data:
-                logs_path = config_data['logs']
+            settings = load_settings()
+            if settings.nick:
+                self.nick_input.setText(settings.nick)
+            if settings.logs:
+                logs_path = settings.logs
                 username = os.getlogin()
                 minigames_path = f"C:\\Users\\{username}\\.cristalix\\updates\\Minigames\\logs\\latest.log"
                 staff_path = f"C:\\Users\\{username}\\.cristalix\\updates\\Minigames-staging-java21\\logs\\latest.log"
@@ -200,21 +295,18 @@ class SetupWindow(BaseWindow):
                 else:
                     self.logs_combo.setCurrentText("Свой путь")
                     self.custom_logs_input.setText(logs_path)
-            if config_data.get('use_sound'):
-                self.sound_checkbox.setChecked(config_data['use_sound'].lower() == 'true')
-            if config_data.get('screenshot_delay'):
-                try:
-                    delay = float(config_data['screenshot_delay'])
-                    self.delay_slider.setValue(int(delay * 10))
-                except (ValueError, TypeError):
-                    self.delay_slider.setValue(7)
-            if config_data.get('bot_id'):
-                self.bot_id_input.setText(config_data['bot_id'])
-            if config_data.get('chat_id'):
-                self.tg_id_input.setText(config_data['chat_id'])
-            if config_data.get('vk_user_id'):
-                self.vk_id_input.setText(config_data['vk_user_id'])
-            if config_data.get('platform') == 'vk':
+            self.sound_checkbox.setChecked(bool(settings.use_sound))
+            try:
+                self.delay_slider.setValue(int(float(settings.screenshot_delay) * 10))
+            except (ValueError, TypeError):
+                self.delay_slider.setValue(7)
+            if settings.bot_id:
+                self.bot_id_input.setText(settings.bot_id)
+            if settings.chat_id:
+                self.tg_id_input.setText(settings.chat_id)
+            if settings.vk_user_id:
+                self.vk_id_input.setText(settings.vk_user_id)
+            if settings.platform == 'vk':
                 self.platform_combo.setCurrentText("ВКонтакте")
             else:
                 self.platform_combo.setCurrentText("Telegram")
@@ -227,15 +319,10 @@ class SetupWindow(BaseWindow):
             self.telegram_widget.setVisible(True)
             self.vk_widget.setVisible(False)
             self._load_telegram_settings()
-            self.bot_id_input.setMinimumWidth(250)
-            self.tg_id_input.setMinimumWidth(250)
         else:
             self.telegram_widget.setVisible(False)
             self.vk_widget.setVisible(True)
             self._load_vk_id()
-            self.vk_id_input.setMinimumWidth(250)
-            self.vk_widget.setMinimumWidth(440)
-        self.setFixedSize(self.size())
         from PyQt5.QtWidgets import QApplication
         QApplication.processEvents()
 
@@ -244,146 +331,85 @@ class SetupWindow(BaseWindow):
         main_layout = QVBoxLayout(screen)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        title_bar = QWidget()
-        title_bar.setFixedHeight(35)
-        title_layout = QHBoxLayout(title_bar)
-        title_layout.setContentsMargins(10, 0, 10, 0)
-        title_label = QLabel("HelperTool - Настройка программы")
-        title_label.setStyleSheet("font-weight: bold; color: #CDD6F4; background: transparent;")
-        title_layout.addWidget(title_label)
-        title_layout.addStretch()
-        self.minimize_btn = QPushButton("_")
-        self.minimize_btn.setFixedSize(30, 20)
-        self.minimize_btn.setToolTip("Свернуть")
-        self.minimize_btn.clicked.connect(self.showMinimized)
-        self.maximize_btn = QPushButton("□")
-        self.maximize_btn.setFixedSize(30, 20)
-        self.maximize_btn.setToolTip("Развернуть")
-        self.maximize_btn.clicked.connect(lambda: self.toggle_maximize(self.maximize_btn))
-        self.close_btn = QPushButton("×")
-        self.close_btn.setFixedSize(30, 20)
-        self.close_btn.setToolTip("Закрыть")
-        self.close_btn.clicked.connect(self.close)
-        title_layout.addWidget(self.minimize_btn)
-        title_layout.addWidget(self.maximize_btn)
-        title_layout.addWidget(self.close_btn)
-        main_layout.addWidget(title_bar)
+        self.title_bar = TitleBar("HelperTool - Настройка программы", self)
+        self.title_bar.apply_theme(self.current_theme)
+        self.minimize_btn = self.title_bar.minimize_btn
+        self.maximize_btn = self.title_bar.maximize_btn
+        self.close_btn = self.title_bar.close_btn
+        main_layout.addWidget(self.title_bar)
         center_widget = QWidget()
         center_layout = QHBoxLayout(center_widget)
         center_layout.setContentsMargins(20, 20, 20, 20)
         center_layout.addStretch()
         content_frame = QWidget()
-        content_frame.setFixedWidth(500)
-        content_frame.setFixedHeight(720)
+        content_frame.setObjectName("configCard")
+        content_frame.setMinimumWidth(520)
+        content_frame.setMaximumWidth(680)
+        content_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         content_frame.setStyleSheet(self._get_content_frame_stylesheet())
         content_layout = QVBoxLayout(content_frame)
-        content_layout.setContentsMargins(30, 30, 30, 30)
-        content_layout.setSpacing(20)
+        content_layout.setContentsMargins(28, 24, 28, 24)
+        content_layout.setSpacing(14)
 
         header_label = QLabel("Настройка конфигурации")
+        header_label.setObjectName("configHeader")
         header_label.setAlignment(Qt.AlignCenter)
-        header_label.setContentsMargins(50, 30, 50, 30)
-        header_label.setStyleSheet("font-size: 18px; font-weight: bold; padding: 10px; margin: 0px; text-align: center; color: #CDD6F4; background: transparent;")
-        content_layout.addWidget(header_label, alignment=Qt.AlignCenter)
-        nick_layout = QHBoxLayout()
-        nick_label = QLabel("Никнейм:")
-        nick_label.setFixedWidth(120)
-        nick_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #CDD6F4; background: transparent;")
+        content_layout.addWidget(header_label)
+
         self.nick_input = QLineEdit()
         self.nick_input.setPlaceholderText("Ваш никнейм в игре")
-        nick_layout.addWidget(nick_label)
-        nick_layout.addWidget(self.nick_input)
-        content_layout.addLayout(nick_layout)
-        logs_layout = QHBoxLayout()
-        logs_label = QLabel("Клиент:")
-        logs_label.setFixedWidth(100)
-        logs_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #CDD6F4; background: transparent;")
+        content_layout.addLayout(self._field_row("Никнейм:", self.nick_input))
+
         self.logs_combo = QComboBox()
         self.logs_combo.addItems(["Minigames", "Staff Minigames", "Свой путь"])
         self.logs_combo.currentTextChanged.connect(self._on_logs_type_changed)
-        logs_layout.addWidget(logs_label)
-        logs_layout.addWidget(self.logs_combo)
-        content_layout.addLayout(logs_layout)
+        content_layout.addLayout(self._field_row("Клиент:", self.logs_combo))
 
         self.custom_logs_widget = QWidget()
+        self.custom_logs_widget.setObjectName("fieldHost")
         self.custom_logs_widget.setVisible(False)
-        self.custom_logs_widget.setFixedHeight(45)
         custom_logs_layout = QHBoxLayout(self.custom_logs_widget)
         custom_logs_layout.setContentsMargins(0, 0, 0, 0)
-        custom_logs_layout.setSpacing(10)
-        custom_logs_label = QLabel("Путь:")
-        custom_logs_label.setFixedWidth(100)
-        custom_logs_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #CDD6F4; background: transparent;")
-        custom_logs_layout.addWidget(custom_logs_label)
+        custom_logs_layout.setSpacing(12)
+        custom_logs_layout.addWidget(self._field_label("Путь:"))
         self.custom_logs_input = QLineEdit()
         self.custom_logs_input.setPlaceholderText("Полный путь до файла latest.log")
-        self.custom_logs_input.setMinimumWidth(250)
-        custom_logs_layout.addWidget(self.custom_logs_input)
-        btn_wrapper = QWidget()
-        btn_wrapper.setFixedSize(30, 30)
-        btn_layout = QVBoxLayout(btn_wrapper)
-        btn_layout.setContentsMargins(0, 0, 0, 0)
-        btn_layout.setSpacing(0)
-        self.browse_logs_btn = QPushButton("...\n\n")
-        self.browse_logs_btn.setFixedSize(28, 28)
+        self.custom_logs_input.setFixedHeight(32)
+        self.custom_logs_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        custom_logs_layout.addWidget(self.custom_logs_input, 1)
+        self.browse_logs_btn = QPushButton("...")
+        self.browse_logs_btn.setFixedSize(32, 32)
         self.browse_logs_btn.setToolTip("Выбрать файл")
         self.browse_logs_btn.clicked.connect(self._browse_logs)
-        btn_layout.addWidget(self.browse_logs_btn, 0, Qt.AlignCenter)
-        custom_logs_layout.addWidget(btn_wrapper)
+        custom_logs_layout.addWidget(self.browse_logs_btn)
         content_layout.addWidget(self.custom_logs_widget)
-        platform_layout = QHBoxLayout()
-        platform_label = QLabel("Платформа:")
-        platform_label.setFixedWidth(100)
-        platform_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #CDD6F4; background: transparent;")
+
         self.platform_combo = QComboBox()
         self.platform_combo.addItems(["Telegram", "ВКонтакте"])
         self.platform_combo.currentTextChanged.connect(self._on_platform_changed)
-        platform_layout.addWidget(platform_label)
-        platform_layout.addWidget(self.platform_combo)
-        content_layout.addLayout(platform_layout)
+        content_layout.addLayout(self._field_row("Платформа:", self.platform_combo))
+
         self.telegram_widget = QWidget()
-        self.telegram_widget.setFixedHeight(100)
+        self.telegram_widget.setObjectName("fieldHost")
         telegram_layout = QVBoxLayout(self.telegram_widget)
         telegram_layout.setContentsMargins(0, 0, 0, 0)
-        telegram_layout.setSpacing(15)
-        bot_id_layout = QHBoxLayout()
-        bot_id_label = QLabel("Token Bot:")
-        bot_id_label.setFixedWidth(120)
-        bot_id_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #CDD6F4; background: transparent;")
+        telegram_layout.setSpacing(14)
         self.bot_id_input = QLineEdit()
         self.bot_id_input.setPlaceholderText("ID бота в формате число:строка")
-        self.bot_id_input.setMinimumWidth(250)
-        bot_id_layout.addWidget(bot_id_label)
-        bot_id_layout.addWidget(self.bot_id_input)
-        telegram_layout.addLayout(bot_id_layout)
-        tg_id_layout = QHBoxLayout()
-        tg_id_label = QLabel("TG ID:")
-        tg_id_label.setFixedWidth(120)
-        tg_id_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #CDD6F4; background: transparent;")
+        telegram_layout.addLayout(self._field_row("Token Bot:", self.bot_id_input))
         self.tg_id_input = QLineEdit()
         self.tg_id_input.setPlaceholderText("ID чата Telegram (число)")
-        self.tg_id_input.setMinimumWidth(250)
-        tg_id_layout.addWidget(tg_id_label)
-        tg_id_layout.addWidget(self.tg_id_input)
-        telegram_layout.addLayout(tg_id_layout)
+        telegram_layout.addLayout(self._field_row("TG ID:", self.tg_id_input))
         content_layout.addWidget(self.telegram_widget)
+
         self.vk_widget = QWidget()
-        self.vk_widget.setFixedHeight(43)
-        self.vk_widget.setMinimumWidth(440)
+        self.vk_widget.setObjectName("fieldHost")
         vk_layout = QVBoxLayout(self.vk_widget)
         vk_layout.setContentsMargins(0, 0, 0, 0)
-        vk_layout.setSpacing(15)
-        vk_id_layout = QHBoxLayout()
-        vk_id_label = QLabel("VK ID:")
-        vk_id_label.setFixedWidth(120)
-        vk_id_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #CDD6F4; background: transparent;")
+        vk_layout.setSpacing(14)
         self.vk_id_input = QLineEdit()
-        self.vk_id_input.setPlaceholderText("Ваш числовой ID ВКонтакте (например, 123456789)")
-        self.vk_id_input.setMinimumWidth(250)
-        vk_id_layout.addWidget(vk_id_label)
-        vk_id_layout.addWidget(self.vk_id_input)
-        vk_layout.addLayout(vk_id_layout)
-        vk_layout.addStretch()
+        self.vk_id_input.setPlaceholderText("Ваш числовой ID ВКонтакте")
+        vk_layout.addLayout(self._field_row("VK ID:", self.vk_id_input))
         self.vk_widget.setVisible(False)
         content_layout.addWidget(self.vk_widget)
 
@@ -391,17 +417,15 @@ class SetupWindow(BaseWindow):
         delay_layout = QHBoxLayout()
         delay_layout.setContentsMargins(0, 0, 0, 0)
         delay_layout.setSpacing(10)
-        delay_label = QLabel("Kd скрина:")
-        delay_label.setFixedWidth(120)
-        delay_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {self.themes[self.current_theme]['text']}; background: transparent;")
-        delay_layout.addWidget(delay_label)
+        delay_layout.addWidget(self._field_label("Kd скрина:"))
         self.delay_slider = QSlider(Qt.Horizontal)
         self.delay_slider.setMinimum(1)
         self.delay_slider.setMaximum(10)
         self.delay_slider.setTickInterval(1)
         self.delay_slider.setTickPosition(QSlider.TicksBelow)
         self.delay_slider.setValue(7)
-        self.delay_slider.setStyleSheet(f"""QSlider {{ background: transparent; }} QSlider::groove:horizontal {{ border: none; height: 6px; background: {self.themes[self.current_theme]['secondary']}; border-radius: 3px; }} QSlider::handle:horizontal {{ background: {self.themes[self.current_theme]['primary']}; border: none; width: 18px; height: 18px; margin: -6px 0; border-radius: 9px; }} QSlider::handle:horizontal:hover {{ background: {self.themes[self.current_theme]['primary_hover']}; }} QSlider::handle:horizontal:pressed {{ background: {self.themes[self.current_theme]['primary_pressed']}; }} QSlider::tick:horizontal {{ background: {self.themes[self.current_theme]['secondary_hover']}; }}""")
+        self.delay_slider.setFixedHeight(24)
+        self.delay_slider.setStyleSheet(self._slider_stylesheet())
         self.delay_value_label = QLabel("0.7 сек")
         self.delay_value_label.setMinimumWidth(60)
         self.delay_value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -414,7 +438,7 @@ class SetupWindow(BaseWindow):
         sound_layout.addStretch()
         self.sound_checkbox = QCheckBox("Использовать звуковые уведомления")
         self.sound_checkbox.setChecked(True)
-        self.sound_checkbox.setStyleSheet(f"""QCheckBox {{ color: {self.themes[self.current_theme]['text']}; font-size: 14px; font-weight: normal; background: transparent; spacing: 8px; }} QCheckBox::indicator {{ width: 18px; height: 18px; border: 2px solid {self.themes[self.current_theme]['secondary_hover']}; border-radius: 4px; background: {self.themes[self.current_theme]['secondary']}; }} QCheckBox::indicator:checked {{ background: {self.themes[self.current_theme]['primary']}; border-color: {self.themes[self.current_theme]['primary']}; }} QCheckBox::indicator:hover {{ border: 2px solid {self.themes[self.current_theme]['primary_hover']}; }}""")
+        self.sound_checkbox.setStyleSheet(checkbox_style(self.current_theme))
         sound_layout.addWidget(self.sound_checkbox)
         sound_layout.addStretch()
         content_layout.addLayout(sound_layout)
@@ -442,27 +466,9 @@ class SetupWindow(BaseWindow):
         layout = QVBoxLayout(screen)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        title_bar = QWidget()
-        title_bar.setFixedHeight(35)
-        title_layout = QHBoxLayout(title_bar)
-        title_layout.setContentsMargins(10, 0, 10, 0)
-        title_label = QLabel("HelperTool - Загрузка")
-        title_label.setStyleSheet("font-weight: bold; color: #CDD6F4; background: transparent;")
-        title_layout.addWidget(title_label)
-        title_layout.addStretch()
-        minimize_btn = QPushButton("_")
-        minimize_btn.setFixedSize(30, 20)
-        minimize_btn.clicked.connect(self.showMinimized)
-        maximize_btn = QPushButton("□")
-        maximize_btn.setFixedSize(30, 20)
-        maximize_btn.clicked.connect(lambda: self.toggle_maximize(maximize_btn))
-        close_btn = QPushButton("×")
-        close_btn.setFixedSize(30, 20)
-        close_btn.clicked.connect(self.close)
-        title_layout.addWidget(minimize_btn)
-        title_layout.addWidget(maximize_btn)
-        title_layout.addWidget(close_btn)
-        layout.addWidget(title_bar)
+        self.loading_title = TitleBar("HelperTool - Загрузка", self)
+        self.loading_title.apply_theme(self.current_theme)
+        layout.addWidget(self.loading_title)
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(20, 20, 20, 20)
@@ -493,14 +499,10 @@ class SetupWindow(BaseWindow):
             self.telegram_widget.setVisible(True)
             self.vk_widget.setVisible(False)
             self._load_telegram_settings()
-            self.bot_id_input.setMinimumWidth(250)
-            self.tg_id_input.setMinimumWidth(250)
         else:
             self.telegram_widget.setVisible(False)
             self.vk_widget.setVisible(True)
             self._load_vk_id()
-            self.vk_id_input.setMinimumWidth(250)
-            self.vk_widget.setMinimumWidth(440)
         self.telegram_widget.updateGeometry()
         self.vk_widget.updateGeometry()
         self.vk_id_input.updateGeometry()
@@ -509,34 +511,19 @@ class SetupWindow(BaseWindow):
 
     def _load_telegram_settings(self):
         try:
-            if os.path.exists(data_path('config.yml')):
-                with open(data_path('config.yml'), 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                config_data = {}
-                for line in lines:
-                    line = line.strip()
-                    if ':' in line:
-                        key, value = line.split(':', 1)
-                        config_data[key.strip()] = value.strip()
-                if 'bot_id' in config_data and config_data['bot_id'] not in ['', 'None']:
-                    self.bot_id_input.setText(config_data['bot_id'])
-                if 'chat_id' in config_data and config_data['chat_id'] not in ['', 'None']:
-                    self.tg_id_input.setText(config_data['chat_id'])
+            settings = load_settings()
+            if settings.bot_id and settings.bot_id not in ['', 'None']:
+                self.bot_id_input.setText(settings.bot_id)
+            if settings.chat_id and settings.chat_id not in ['', 'None']:
+                self.tg_id_input.setText(settings.chat_id)
         except Exception as e:
             print(f"Ошибка загрузки настроек Telegram: {e}")
 
     def _load_vk_id(self):
         try:
-            if os.path.exists(data_path('config.yml')):
-                with open(data_path('config.yml'), 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                for line in lines:
-                    line = line.strip()
-                    if line.startswith('vk_user_id:'):
-                        vk_id = line.split(':', 1)[1].strip()
-                        if vk_id and vk_id not in ['', 'None']:
-                            self.vk_id_input.setText(vk_id)
-                            break
+            vk_id = load_settings().vk_user_id
+            if vk_id and vk_id not in ['', 'None']:
+                self.vk_id_input.setText(vk_id)
         except Exception as e:
             print(f"Ошибка загрузки VK ID: {e}")
 
@@ -593,57 +580,36 @@ class SetupWindow(BaseWindow):
             self.show_error("\n".join(errors))
             return
 
-        existing_config = {}
-        try:
-            if os.path.exists(data_path('config.yml')):
-                with open(data_path('config.yml'), 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                for line in lines:
-                    line = line.strip()
-                    if ':' in line:
-                        key, value = line.split(':', 1)
-                        existing_config[key.strip()] = value.strip()
-        except Exception as e:
-            print(f"Не удалось прочитать существующий конфиг: {e}")
-
-        self.old_bot_id = existing_config.get('bot_id', '')
-        self.old_chat_id = existing_config.get('chat_id', '')
+        existing = load_settings()
+        self.old_bot_id = existing.bot_id or ''
+        self.old_chat_id = existing.chat_id or ''
 
         try:
-            config_lines = [
-                f"nick: {nick}",
-                f"logs: {logs_path}",
-                f"platform: {'vk' if platform_choice == 'ВКонтакте' else 'telegram'}",
-                f"use_sound: {str(use_sound).lower()}",
-                f"screenshot_delay: {screenshot_delay_val:.1f}",
-            ]
             if platform_choice == "Telegram":
-                config_lines.append(f"bot_id: {bot_id_val}")
-                config_lines.append(f"chat_id: {tg_id_val}")
+                bot_saved = bot_id_val
+                chat_saved = tg_id_val
+                vk_saved = existing.vk_user_id
             else:
-                config_lines.append(f"bot_id: {existing_config.get('bot_id', '')}")
-                config_lines.append(f"chat_id: {existing_config.get('chat_id', '')}")
-            if platform_choice == "ВКонтакте":
-                config_lines.append(f"vk_user_id: {vk_id_val}")
-            else:
-                config_lines.append(f"vk_user_id: {existing_config.get('vk_user_id', '')}")
-            if 'log_display_mode' not in existing_config:
-                config_lines.append(f"log_display_mode: {log_display_mode}")
-            config_content = "\n".join(config_lines)
-            if not config_content.endswith('\n'):
-                config_content += '\n'
-            with open(data_path('config.yml'), 'w', encoding='utf-8', newline='\n') as f:
-                f.write(config_content)
+                bot_saved = existing.bot_id
+                chat_saved = existing.chat_id
+                vk_saved = vk_id_val
 
-            from core.globals import reload_globals_from_config
-            reload_globals_from_config()
+            existing.nick = nick
+            existing.logs = logs_path
+            existing.platform = 'vk' if platform_choice == 'ВКонтакте' else 'telegram'
+            existing.use_sound = use_sound
+            existing.screenshot_delay = screenshot_delay_val
+            existing.bot_id = bot_saved
+            existing.chat_id = chat_saved
+            existing.vk_user_id = vk_saved
+            save_settings(existing)
 
             self.validation_data = {
                 'nick': nick,
                 'platform': platform_choice,
-                'bot_id': bot_id_val if platform_choice == "Telegram" else existing_config.get('bot_id', ''),
-                'chat_id': tg_id_val if platform_choice == "Telegram" else existing_config.get('chat_id', ''),
-                'vk_user_id': vk_id_val if platform_choice == "ВКонтакте" else existing_config.get('vk_user_id', '')
+                'bot_id': bot_saved,
+                'chat_id': chat_saved,
+                'vk_user_id': vk_saved,
             }
             self.stacked_widget.setCurrentWidget(self.loading_screen)
             self._start_validation()
@@ -686,32 +652,34 @@ class SetupWindow(BaseWindow):
             return {"success": False, "message": f"Ошибка Telegram API: {e}"}
 
     def save_bot_verification(self, bot_id_val, chat_id_val):
-        try:
-            with open(data_path('bot_verified.txt'), 'w') as f:
-                f.write(f"{bot_id_val}|{chat_id_val}")
-        except Exception as e:
-            print(f"Не удалось сохранить информацию о проверке: {e}")
+        self.save_verification_info(bot_id_val, chat_id_val)
 
     def _open_main_window(self):
         from ui.main_window import MainWindow
-        from core.globals import reload_globals_from_config, main_window
+        from core.globals import reload_globals_from_config
+        import core.globals as g
 
         reload_globals_from_config()
 
-        pos = self.pos()
-        size = self.size()
-        is_max = self.isMaximized()
-        self.close()
+        if getattr(self, '_main_screen', None) is None:
+            self._main_screen = MainWindow(parent=self)
+            self.stacked_widget.addWidget(self._main_screen)
 
-        main_window = MainWindow()
-        main_window.setup_initial_display()
+        g.main_window = self._main_screen
+        self.setMinimumSize(800, 560)
+        self.stacked_widget.setCurrentWidget(self._main_screen)
 
-        if is_max:
-            main_window.showMaximized()
-        else:
-            main_window.move(pos)
-            main_window.resize(size)
-            main_window.show()
+        self._main_screen.setup_initial_display()
+        if not self._main_screen.log_monitor.isRunning():
+            self._main_screen.log_monitor.start()
+        self._main_screen.update_stats()
 
-        main_window.log_monitor.start()
-        main_window.update_stats()
+    def closeEvent(self, event):
+        if getattr(self, '_main_screen', None) is not None:
+            self._main_screen.shutdown()
+        if hasattr(self, 'validation_thread') and self.validation_thread is not None:
+            try:
+                self.validation_thread.stop()
+            except Exception:
+                pass
+        super().closeEvent(event)

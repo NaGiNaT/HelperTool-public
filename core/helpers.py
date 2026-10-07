@@ -7,18 +7,16 @@ import signal
 import datetime
 import tzlocal
 from tzlocal import get_localzone
-from core.globals import main_window, gui_ready, gui_messages_buffer
-from core.paths import resource_path
+import core.globals as g
+from core.paths import resource_path, SCREENSHOTS_DIR
 import warnings
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
 
 def gui_print(message: str):
-    global main_window, gui_ready, gui_messages_buffer
-
-    if gui_ready and main_window and hasattr(main_window, 'log_message'):
-        main_window.log_message(message)
+    if g.gui_ready and g.main_window and hasattr(g.main_window, 'log_message'):
+        g.main_window.log_message(message)
     else:
-        gui_messages_buffer.append(message)
+        g.gui_messages_buffer.append(message)
         print(message)
 
 
@@ -27,17 +25,17 @@ def cleanup():
     gui_print("[SYSTEM] Выключение HelperTool...")
 
     try:
-        if main_window:
-            if hasattr(main_window, 'log_monitor'):
-                main_window.log_monitor.stop()
-            if hasattr(main_window, 'message_sender'):
-                main_window.message_sender.stop()
+        if g.main_window:
+            if hasattr(g.main_window, 'log_monitor'):
+                g.main_window.log_monitor.stop()
+            if hasattr(g.main_window, 'message_sender'):
+                g.main_window.message_sender.stop()
     except Exception as e:
         print(f"Cleanup QThreads error: {e}")
 
     try:
-        if main_window and hasattr(main_window, 'keyboard_listener'):
-            main_window.keyboard_listener.stop()
+        if g.main_window and hasattr(g.main_window, 'keyboard_listener'):
+            g.main_window.keyboard_listener.stop()
     except Exception as e:
         print(f"Cleanup hotkeys error: {e}")
 
@@ -64,12 +62,13 @@ def cleanup():
         print(f"Cleanup threads error: {e}")
 
     try:
-        for file in os.listdir('.'):
-            if file.startswith('screenshot_') and file.endswith('.png'):
-                try:
-                    os.remove(file)
-                except Exception:
-                    pass
+        if os.path.isdir(SCREENSHOTS_DIR):
+            for file in os.listdir(SCREENSHOTS_DIR):
+                if file.startswith('screenshot_') and file.endswith('.png'):
+                    try:
+                        os.remove(os.path.join(SCREENSHOTS_DIR, file))
+                    except Exception:
+                        pass
     except Exception as e:
         print(f"Cleanup files error: {e}")
 
@@ -104,7 +103,8 @@ signal.signal(signal.SIGTERM, safe_cleanup)
 
 
 def make_sound():
-    import pygamesilent as pygame
+    os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
+    import pygame
 
     sound_path = resource_path(os.path.join('path', 'click.mp3'))
     if not os.path.exists(sound_path):
@@ -154,16 +154,11 @@ def add_timezone_to_str(time_str: str) -> str:
 
 
 
-def create_empty_config():
-    from core.paths import data_path
-
-    if not os.path.exists(data_path('config.yml')):
-        try:
-            with open(data_path('config.yml'), 'w', encoding='utf-8') as f:
-                f.write("")
-            gui_print("[SYSTEM] Создан пустой config.yml")
-            return True
-        except Exception as e:
-            gui_print(f"[ERROR] Не удалось создать config.yml: {e}")
-            return False
-    return False
+def init_local_storage():
+    from core.settings import init_settings
+    try:
+        init_settings()
+        return True
+    except Exception as e:
+        gui_print(f"[ERROR] Не удалось инициализировать базу настроек: {e}")
+        return False

@@ -1,5 +1,4 @@
-import os
-from core.paths import data_path
+from core.settings import load_settings, update_settings
 
 # ===== Темы =====
 
@@ -253,23 +252,186 @@ def get_theme_stylesheet(theme_name: str) -> str:
 
 
 def load_saved_theme() -> str:
-    """Загружает сохранённую тему из data/theme.txt"""
-    theme_path = data_path('theme.txt')
-    try:
-        with open(theme_path, 'r', encoding='utf-8') as f:
-            saved = f.read().strip()
-            if saved in THEMES:
-                return saved
-    except FileNotFoundError:
-        pass
+    saved = load_settings().theme
+    if saved in THEMES:
+        return saved
     return "Dark Orange"
 
 
 def save_theme(theme_name: str):
-    """Сохраняет выбранную тему в data/theme.txt"""
-    theme_path = data_path('theme.txt')
-    with open(theme_path, 'w', encoding='utf-8') as f:
-        f.write(theme_name)
+    update_settings(theme=theme_name)
+
+
+def theme(theme_name: str) -> dict:
+    return THEMES.get(theme_name, THEMES["Dark Orange"])
+
+
+def window_button_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return (
+        f"QPushButton {{ background-color: transparent; color: {t['text']}; border: none; "
+        f"font-size: 16px; font-weight: normal; padding: 0px; margin: 0px; }} "
+        f"QPushButton:hover {{ background-color: {t['secondary_hover']}; }} "
+        f"QPushButton:pressed {{ background-color: {t['secondary']}; }}"
+    )
+
+
+def close_button_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return (
+        f"QPushButton {{ background-color: transparent; color: {t['text']}; border: none; "
+        f"font-size: 16px; font-weight: normal; padding: 0px; margin: 0px; }} "
+        f"QPushButton:hover {{ background-color: #FF4757; color: white; }} "
+        f"QPushButton:pressed {{ background-color: #FF3742; }}"
+    )
+
+
+def title_label_style(theme_name: str, size: int = 12) -> str:
+    t = theme(theme_name)
+    return (
+        f"font-size: {size}px; font-weight: bold; color: {t['text']}; "
+        f"background: transparent; padding: 0px; margin: 0px;"
+    )
+
+
+def toolbar_button_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return (
+        f"QPushButton {{ background-color: {t['background']}; color: {t['text']}; "
+        f"border: 1px solid {t['secondary_hover']}; "
+        f"border-radius: 4px; padding: 4px 8px; font-size: 11px; margin: 0px; }} "
+        f"QPushButton:hover {{ background-color: {t['secondary']}; border-color: {t['primary']}; }} "
+        f"QPushButton:pressed {{ background-color: {t['secondary_hover']}; }}"
+    )
+
+
+def accent_button_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return (
+        f"QPushButton {{ background-color: {t['primary']}; color: white; border: none; "
+        f"border-radius: 2px; padding: 4px 8px; font-size: 11px; margin: 0px; }} "
+        f"QPushButton:hover {{ background-color: {t['primary_hover']}; }} "
+        f"QPushButton:pressed {{ background-color: {t['primary_pressed']}; }}"
+    )
+
+
+def checkbox_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return f"""
+    QCheckBox {{
+        color: {t['text']};
+        font-size: 14px;
+        font-weight: normal;
+        background: transparent;
+        spacing: 8px;
+        border: none;
+    }}
+    QCheckBox::indicator {{
+        width: 18px;
+        height: 18px;
+        border: 2px solid {t['secondary_hover']};
+        border-radius: 4px;
+        background: {t['secondary']};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {t['primary']};
+        border-color: {t['primary']};
+    }}
+    QCheckBox::indicator:hover {{
+        border: 2px solid {t['primary_hover']};
+    }}
+    """
+
+
+def slider_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return f"""
+    QSlider {{ background: transparent; border: none; min-height: 22px; }}
+    QSlider::groove:horizontal {{
+        border: none;
+        height: 4px;
+        background: {t['secondary_hover']};
+        border-radius: 2px;
+        margin: 0 2px;
+    }}
+    QSlider::sub-page:horizontal {{
+        background: {t['primary']};
+        border-radius: 2px;
+    }}
+    QSlider::handle:horizontal {{
+        background: {t['primary']};
+        border: none;
+        width: 16px;
+        height: 16px;
+        margin: -6px 0;
+        border-radius: 8px;
+    }}
+    QSlider::handle:horizontal:hover {{ background: {t['primary_hover']}; }}
+    """
+
+
+def field_label_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return (
+        f"color: {t['text']}; background: transparent; "
+        f"border: 1px solid {t['secondary_hover']}; border-radius: 8px; "
+        f"font-size: 14px; font-weight: bold; padding: 0px 10px; margin: 0px;"
+    )
+
+
+def stat_label_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return (
+        f"font-size: 14px; background-color: {t['secondary']}; padding: 10px; "
+        f"border-radius: 5px; border: 1px solid {t['secondary_hover']}; color: {t['text']};"
+    )
+
+
+def session_label_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return (
+        f"font-size: 14px; font-weight: bold; color: {t['accent']}; "
+        f"background-color: {t['secondary']}; padding: 8px 12px; border-radius: 8px; "
+        f"border: 1px solid {t['secondary_hover']}; min-width: 120px;"
+    )
+
+
+def bind_label_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return (
+        f"font-size: 14px; color: {t['primary']}; padding: 8px; "
+        f"background-color: {t['secondary']}; border-radius: 5px; "
+        f"border: 1px solid {t['secondary_hover']};"
+    )
+
+
+def log_output_style(theme_name: str) -> str:
+    t = theme(theme_name)
+    return (
+        f"QTextEdit {{ background-color: {t['secondary']}; color: {t['text']}; "
+        f"border: 1px solid {t['secondary_hover']}; border-radius: 5px; padding: 10px; "
+        f"font-family: 'Cascadia Code', 'Courier New', monospace; font-size: 12px; "
+        f"selection-background-color: {t['primary']}; }} "
+        f"QScrollBar:vertical {{ border: none; background: {t['secondary']}; width: 12px; margin: 0px; }} "
+        f"QScrollBar::handle:vertical {{ background: {t['secondary_hover']}; border-radius: 6px; min-height: 30px; }} "
+        f"QScrollBar::handle:vertical:hover {{ background: {t['primary']}; }} "
+        f"QScrollBar::handle:vertical:pressed {{ background: {t['primary_pressed']}; }}"
+    )
+
+
+def main_window_stylesheet(theme_name: str) -> str:
+    t = theme(theme_name)
+    return f"""
+    QWidget {{ background: transparent; color: {t['text']}; font-family: 'Segoe UI', Arial; }}
+    QTextEdit {{ background-color: {t['secondary']}; color: {t['text']}; border: 1px solid {t['secondary_hover']}; border-radius: 5px; padding: 10px; font-family: 'Cascadia Code', 'Courier New', monospace; font-size: 12px; selection-background-color: {t['primary']}; }}
+    QLabel {{ color: {t['text']}; padding: 5px; }}
+    QPushButton {{ background-color: {t['primary']}; color: white; border: none; border-radius: 5px; padding: 10px 20px; font-size: 14px; font-weight: bold; }}
+    QPushButton:hover {{ background-color: {t['primary_hover']}; }}
+    QPushButton:pressed {{ background-color: {t['primary_pressed']}; }}
+    QPushButton:disabled {{ background-color: {t['secondary']}; color: {t['text_secondary']}; }}
+    QMenu {{ background-color: {t['background']}; color: {t['text']}; border: 1px solid {t['secondary_hover']}; }}
+    QMenu::item:selected {{ background-color: {t['primary']}; }}
+    """
 
 
 def get_log_colors(theme_name: str = None) -> dict:

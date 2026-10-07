@@ -1,69 +1,55 @@
 import os
-import re
 import sys
 import subprocess
 import datetime
-import threading
-import random
-import time as tm
-import pyautogui as pag
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTextEdit, QMenu, QAction
+    QTextEdit, QMenu, QAction, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QRect, QTimer, pyqtSignal
-from PyQt5.QtGui import QPainter, QBrush, QColor, QPen, QMouseEvent, QIcon
-from tzlocal import get_localzone
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 
-from ui.base_window import BaseWindow
-from core.paths import data_path
-from core.helpers import gui_print, make_sound, pressing_key, add_timezone_to_str
-from core.globals import (
-    main_window, gui_messages_buffer, platform, vk_user_id,
-    bot_id, chat_id, logs, my_nickname, using_sounds_in_program,
-    screenshot_delay, log_display_mode, put_do_logov,
-    all_mutes, all_warns, all_kicks, previous_sender, my_id
+from ui.title_bar import TitleBar
+from ui.theme_manager import (
+    THEMES, accent_button_style, bind_label_style, log_output_style,
+    main_window_stylesheet, session_label_style, stat_label_style, toolbar_button_style,
 )
-from config import VK_TOKEN, TELEGRAM_REDIR_BOT_TOKEN, LOG_CHAT_ID, VERSION
+from core.helpers import gui_print, make_sound
+from core.settings import load_settings, update_settings
+from core.globals import (
+    gui_messages_buffer, platform, vk_user_id,
+    my_nickname, using_sounds_in_program,
+    log_display_mode, put_do_logov,
+    all_mutes, all_warns, all_kicks, previous_sender
+)
+from config import VERSION
+from domain.parser import parse_moderation_line
+from services.operation_queue import OperationQueue
 
 from threads.log_monitor import LogMonitorThread
 from threads.message_sender import MessageSenderThread
-from threads.action_threads import (
-    MuteActionsThread, WarnActionsThread, KickActionsThread, ScreenshotThread
-)
+from threads.action_threads import ScreenshotThread
 from threads.update_downloader import UpdateDownloaderThread
 from updater import check_for_update
 
 
-class MainWindow(BaseWindow):
+class MainWindow(QWidget):
+    """Main panel content; lives inside the app shell stacked pages."""
+
     sound_requested = pyqtSignal()
-    screenshot_complete = pyqtSignal(str)
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
-        try:
-            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'path', 'icon.ico')
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
-        except Exception as e:
-            gui_print(f"[ERROR] Не удалось установить иконку для MainWindow: {e}")
+        self.themes = THEMES
 
-        self.themes = {
-            "Dark Orange": {"primary": "#FF7F50", "primary_hover": "#FF9D7A", "primary_pressed": "#E67A5D", "background": "#2B2C34", "secondary": "#45475A", "secondary_hover": "#585B70", "text": "#CDD6F4", "text_secondary": "#A6ADC8", "accent": "#94E2D5", "error": "#F38BA8", "warning": "#F9E2AF", "success": "#A6E3A1", "chat": "#CDD6F4"},
-            "Dark Blue": {"primary": "#89B4FA", "primary_hover": "#A6C8FF", "primary_pressed": "#74A7F7", "background": "#1E1E2E", "secondary": "#313244", "secondary_hover": "#45475A", "text": "#CDD6F4", "text_secondary": "#A6ADC8", "accent": "#74C7EC", "error": "#F38BA8", "warning": "#F9E2AF", "success": "#A6E3A1", "chat": "#CDD6F4"},
-            "Light White": {"primary": "#2563EB", "primary_hover": "#3B82F6", "primary_pressed": "#1D4ED8", "background": "#FFFFFF", "secondary": "#F8FAFC", "secondary_hover": "#F1F5F9", "text": "#1E293B", "text_secondary": "#475569", "accent": "#0369A1", "error": "#DC2626", "warning": "#EA580C", "success": "#16A34A", "chat": "#1E293B"},
-            "Purple": {"primary": "#CBA6F7", "primary_hover": "#D9BBF9", "primary_pressed": "#BB90F4", "background": "#1A1B26", "secondary": "#343B58", "secondary_hover": "#444B73", "text": "#C0CAF5", "text_secondary": "#A9B1D6", "accent": "#7AA2F7", "error": "#F7768E", "warning": "#E0AF68", "success": "#9ECE6A", "chat": "#C0CAF5"}
-        }
-
-        self.setGeometry(100, 100, 1000, 800)
         self.current_theme = self._load_theme()
         self.setStyleSheet(self._get_theme_stylesheet())
 
-        self.operation_queue = []
-        self.current_operation = None
-        self.operation_lock = threading.Lock()
-        self.processing_delay = 1.5
+        self.ops = OperationQueue(self, processing_delay=1.5)
+        self.ops.log_signal.connect(self.log_message)
+        self.ops.sound_signal.connect(self._play_sound)
+        self.ops.stats_signal.connect(lambda _t: self.update_stats())
+        self.ops.warning_signal.connect(gui_print)
 
         self.session_start_time = datetime.datetime.now()
         self.session_timer = QTimer()
@@ -75,12 +61,14 @@ class MainWindow(BaseWindow):
         self.current_bind_keycode = None
         self.setting_bind_mode = False
         self.keyboard_listener = None
+        self._screenshot_busy = False
+        self._hotkey_held = False
+        self._hotkey_shot_armed = True
 
         self._init_ui()
         self._flush_message_buffer()
 
         self.sound_requested.connect(self._play_sound)
-        self.screenshot_complete.connect(self.log_message)
 
         self._load_bind()
         self._apply_theme(self.current_theme)
@@ -93,35 +81,19 @@ class MainWindow(BaseWindow):
         self.log_monitor.log_line_signal.connect(self.process_log_line)
 
     def _load_theme(self):
-        try:
-            with open(data_path('theme.txt'), 'r') as f:
-                t = f.read().strip()
-                if t in self.themes:
-                    return t
-        except FileNotFoundError:
-            pass
+        t = load_settings().theme
+        if t in self.themes:
+            return t
         return "Dark Orange"
 
     def _save_theme(self, tn):
         try:
-            with open(data_path('theme.txt'), 'w') as f:
-                f.write(tn)
+            update_settings(theme=tn)
         except Exception as e:
             gui_print(f"[ERROR] Ошибка сохранения темы: {e}")
 
     def _get_theme_stylesheet(self):
-        t = self.themes.get(self.current_theme, self.themes["Dark Orange"])
-        return f"""
-        QWidget {{ background-color: {t['background']}; color: {t['text']}; font-family: 'Segoe UI', Arial; }}
-        QTextEdit {{ background-color: {t['secondary']}; color: {t['text']}; border: 1px solid {t['secondary_hover']}; border-radius: 5px; padding: 10px; font-family: 'Cascadia Code', 'Courier New', monospace; font-size: 12px; selection-background-color: {t['primary']}; }}
-        QLabel {{ color: {t['text']}; padding: 5px; }}
-        QPushButton {{ background-color: {t['primary']}; color: white; border: none; border-radius: 5px; padding: 10px 20px; font-size: 14px; font-weight: bold; }}
-        QPushButton:hover {{ background-color: {t['primary_hover']}; }}
-        QPushButton:pressed {{ background-color: {t['primary_pressed']}; }}
-        QPushButton:disabled {{ background-color: {t['secondary']}; color: {t['text_secondary']}; }}
-        QMenu {{ background-color: {t['background']}; color: {t['text']}; border: 1px solid {t['secondary_hover']}; }}
-        QMenu::item:selected {{ background-color: {t['primary']}; }}
-        """
+        return main_window_stylesheet(self.current_theme)
 
     def _show_theme_menu(self):
         m = QMenu(self)
@@ -144,48 +116,27 @@ class MainWindow(BaseWindow):
         gui_print(f"[SYSTEM] Тема изменена на: {tn}")
 
     def _update_theme_specific_styles(self):
-        t = self.themes[self.current_theme]
-        self.title_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {t['text']}; background: transparent; padding: 0px; margin: 0px;")
-        self.log_mode_btn.setStyleSheet(f"QPushButton {{ background-color: {t['secondary']}; color: {t['text']}; border: none; border-radius: 2px; padding: 4px 8px; font-size: 11px; margin: 0px; }} QPushButton:hover {{ background-color: {t['secondary_hover']}; }} QPushButton:pressed {{ background-color: {t['secondary']}; }}")
-        self.theme_btn.setStyleSheet(f"QPushButton {{ background-color: {t['secondary']}; color: {t['text']}; border: none; border-radius: 2px; padding: 4px 8px; font-size: 11px; margin: 0px; }} QPushButton:hover {{ background-color: {t['secondary_hover']}; }} QPushButton:pressed {{ background-color: {t['secondary']}; }}")
-        self.update_btn.setStyleSheet(f"QPushButton {{ background-color: {t['primary']}; color: white; border: none; border-radius: 2px; padding: 4px 8px; font-size: 11px; margin: 0px; }} QPushButton:hover {{ background-color: {t['primary_hover']}; }} QPushButton:pressed {{ background-color: {t['primary_pressed']}; }}")
-        wb = f"QPushButton {{ background-color: transparent; color: {t['text']}; border: none; font-size: 16px; font-weight: normal; padding: 0px; margin: 0px; }} QPushButton:hover {{ background-color: {t['secondary_hover']}; }} QPushButton:pressed {{ background-color: {t['secondary']}; }}"
-        cb = f"QPushButton {{ background-color: transparent; color: {t['text']}; border: none; font-size: 16px; font-weight: normal; padding: 0px; margin: 0px; }} QPushButton:hover {{ background-color: #FF4757; color: white; }} QPushButton:pressed {{ background-color: #FF3742; }}"
-        self.minimize_btn.setStyleSheet(wb)
-        self.maximize_btn.setStyleSheet(wb)
-        self.close_btn.setStyleSheet(cb)
-        self.bind_label.setStyleSheet(f"font-size: 14px; color: {t['primary']}; padding: 8px; background-color: {t['secondary']}; border-radius: 5px; border: 1px solid {t['secondary_hover']};")
-        ss = f"font-size: 14px; background-color: {t['secondary']}; padding: 10px; border-radius: 5px; border: 1px solid {t['secondary_hover']}; color: {t['text']};"
-        self.mutes_label.setStyleSheet(ss)
-        self.warns_label.setStyleSheet(ss)
-        self.kicks_label.setStyleSheet(ss)
-        self.session_timer_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {t['accent']}; background-color: {t['secondary']}; padding: 8px 12px; border-radius: 8px; border: 1px solid {t['secondary_hover']}; min-width: 120px;")
-        self.log_output.setStyleSheet(f"QTextEdit {{ background-color: {t['secondary']}; color: {t['text']}; border: 1px solid {t['secondary_hover']}; border-radius: 5px; padding: 10px; font-family: 'Cascadia Code', 'Courier New', monospace; font-size: 12px; selection-background-color: {t['primary']}; }} QScrollBar:vertical {{ border: none; background: {t['secondary']}; width: 12px; margin: 0px; }} QScrollBar::handle:vertical {{ background: {t['secondary_hover']}; border-radius: 6px; min-height: 30px; }} QScrollBar::handle:vertical:hover {{ background: {t['primary']}; }} QScrollBar::handle:vertical:pressed {{ background: {t['primary_pressed']}; }}")
+        if hasattr(self, 'title_bar'):
+            self.title_bar.apply_theme(self.current_theme)
+        toolbar = toolbar_button_style(self.current_theme)
+        self.log_mode_btn.setStyleSheet(toolbar)
+        self.theme_btn.setStyleSheet(toolbar)
+        self.update_btn.setStyleSheet(accent_button_style(self.current_theme))
+        self.bind_label.setStyleSheet(bind_label_style(self.current_theme))
+        stats = stat_label_style(self.current_theme)
+        self.mutes_label.setStyleSheet(stats)
+        self.warns_label.setStyleSheet(stats)
+        self.kicks_label.setStyleSheet(stats)
+        self.session_timer_label.setStyleSheet(session_label_style(self.current_theme))
+        self.log_output.setStyleSheet(log_output_style(self.current_theme))
         self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        theme = self.themes[self.current_theme]
-        painter.setBrush(QBrush(QColor(theme['background'])))
-        painter.setPen(Qt.NoPen)
-        painter.drawRoundedRect(QRect(2, 2, self.width()-4, self.height()-4), 8, 8)
-        painter.setBrush(QBrush(QColor(theme['secondary'])))
-        painter.drawRect(QRect(2, 2, self.width()-4, 35))
-        painter.setPen(QPen(QColor(theme['secondary_hover']), 2))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawRoundedRect(QRect(1, 1, self.width()-2, self.height()-2), 8, 8)
 
     def _load_platform(self):
         global platform, vk_user_id
         try:
-            if os.path.exists(data_path('config.yml')):
-                with open(data_path('config.yml'), 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.startswith('platform:'):
-                            platform = line.split(':', 1)[1].strip()
-                        elif line.startswith('vk_user_id:'):
-                            vk_user_id = line.split(':', 1)[1].strip()
+            settings = load_settings()
+            platform = settings.platform or 'telegram'
+            vk_user_id = settings.vk_user_id or ''
         except Exception as e:
             gui_print(f"[ERROR] Ошибка загрузки платформы: {e}")
 
@@ -270,54 +221,32 @@ del "%~f0"
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(10, 10, 10, 10)
 
-        title_bar_widget = QWidget()
-        title_bar_widget.setFixedHeight(35)
-        title_bar_layout = QHBoxLayout(title_bar_widget)
-        title_bar_layout.setContentsMargins(10, 0, 10, 0)
-        title_bar_layout.setSpacing(5)
-
-        self.title_label = QLabel(f"HelperTool v{VERSION} - Панель управления")
-        title_bar_layout.addWidget(self.title_label)
-        title_bar_layout.addStretch()
+        self.title_bar = TitleBar(f"HelperTool v{VERSION} - Панель управления", self)
+        self.title_label = self.title_bar.title_label
 
         self.log_mode_btn = QPushButton()
         self.log_mode_btn.setFixedSize(85, 24)
         self.log_mode_btn.setToolTip("Переключить режим отображения логов")
         self.log_mode_btn.clicked.connect(self._toggle_log_display_mode)
-        title_bar_layout.addWidget(self.log_mode_btn)
+        self.title_bar.add_widget(self.log_mode_btn)
 
         self.theme_btn = QPushButton("Тема")
         self.theme_btn.setFixedSize(70, 24)
         self.theme_btn.setToolTip("Сменить тему")
         self.theme_btn.clicked.connect(self._show_theme_menu)
-        title_bar_layout.addWidget(self.theme_btn)
+        self.title_bar.add_widget(self.theme_btn)
 
         self.update_btn = QPushButton("Обновление")
         self.update_btn.setFixedSize(100, 24)
         self.update_btn.setToolTip("Скачать новую версию")
         self.update_btn.setVisible(False)
         self.update_btn.clicked.connect(self._start_update_download)
-        title_bar_layout.addWidget(self.update_btn)
+        self.title_bar.add_widget(self.update_btn)
 
-        self.minimize_btn = QPushButton("_")
-        self.minimize_btn.setFixedSize(30, 20)
-        self.minimize_btn.setToolTip("Свернуть")
-        self.minimize_btn.clicked.connect(self.showMinimized)
-
-        self.maximize_btn = QPushButton("□")
-        self.maximize_btn.setFixedSize(30, 20)
-        self.maximize_btn.setToolTip("Развернуть")
-        self.maximize_btn.clicked.connect(lambda: self.toggle_maximize(self.maximize_btn))
-
-        self.close_btn = QPushButton("×")
-        self.close_btn.setFixedSize(30, 20)
-        self.close_btn.setToolTip("Закрыть")
-        self.close_btn.clicked.connect(self.close)
-
-        title_bar_layout.addWidget(self.minimize_btn)
-        title_bar_layout.addWidget(self.maximize_btn)
-        title_bar_layout.addWidget(self.close_btn)
-        main_layout.addWidget(title_bar_widget)
+        self.minimize_btn = self.title_bar.minimize_btn
+        self.maximize_btn = self.title_bar.maximize_btn
+        self.close_btn = self.title_bar.close_btn
+        main_layout.addWidget(self.title_bar)
 
         top_panel_layout = QHBoxLayout()
         stats_layout = QHBoxLayout()
@@ -335,7 +264,8 @@ del "%~f0"
 
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        content_layout.addWidget(self.log_output)
+        self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        content_layout.addWidget(self.log_output, 1)
 
         buttons_layout = QHBoxLayout()
         self.bind_btn = QPushButton("Изменить бинд скриншота")
@@ -411,25 +341,7 @@ del "%~f0"
     def _save_log_display_mode(self):
         global log_display_mode
         try:
-            cl = []
-            if os.path.exists(data_path('config.yml')):
-                with open(data_path('config.yml'), 'r', encoding='utf-8') as f:
-                    cl = f.readlines()
-            found = False
-            for i, l in enumerate(cl):
-                if l.strip().startswith('log_display_mode:'):
-                    cl[i] = f"log_display_mode: {log_display_mode}\n"
-                    found = True
-                    break
-            if not found:
-                if cl and not cl[-1].endswith('\n'):
-                    cl[-1] += '\n'
-                cl.append(f"log_display_mode: {log_display_mode}\n")
-            with open(data_path('config.yml'), 'w', encoding='utf-8', newline='\n') as f:
-                for l in cl:
-                    if l and not l.endswith('\n'):
-                        l += '\n'
-                    f.write(l)
+            update_settings(log_display_mode=log_display_mode)
         except Exception as e:
             gui_print(f"[ERROR] Ошибка сохранения режима отображения: {e}")
 
@@ -516,130 +428,30 @@ del "%~f0"
         if not self.filter_new_messages or '[CHAT]' in line:
             self.log_message(line)
         try:
-            escaped_nick = re.escape(my_nickname)
-
-            tag_tail = r'\S*(?:\s+\S+)*'
-
-            mute_pattern = (
-                r'㰳\s+(\S+)\s+(\S+)\s+(' + escaped_nick + r')' + tag_tail +
-                r'\s+замутил\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
-            )
-            mute_match = re.search(mute_pattern, line)
-            if mute_match:
-                temp_nick = mute_match.group(4) + ' ┃ ' + '<code>' + mute_match.group(5) + '</code>' if mute_match.group(5) else '<code>' + mute_match.group(4) + '</code>'
-                my_full_nickname = mute_match.group(1) + ' ' + mute_match.group(2) + ' ' + '<code>' + mute_match.group(3) + '</code>'
-                previous_sender = line
-                self._add_to_queue('mute', {'line': line, 'my_full_nickname': my_full_nickname, 'temp_nick': temp_nick, 'warns': mute_match.group(6)})
+            event = parse_moderation_line(line, my_nickname)
+            if event is None:
                 return
-
-            warn_pattern = (
-                r'(\S+)\s+(\S+)\s+(' + escaped_nick + r')' + tag_tail +
-                r'\s+предупредил\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
-            )
-            warn_match = re.search(warn_pattern, line)
-            if warn_match:
-                tempo_nick = (warn_match.group(5)).rstrip(".") if warn_match.group(5) else (warn_match.group(4)).rstrip(".")
-                temp_nick = warn_match.group(4) + ' ┃ ' + '<code>' + tempo_nick + '</code>' if warn_match.group(5) else '<code>' + tempo_nick + '</code>'
-                my_full_nickname = warn_match.group(1) + ' ' + warn_match.group(2) + ' ' + '<code>' + warn_match.group(3) + '</code>'
-                previous_sender = line
-                self._add_to_queue('warn', {'line': line, 'my_full_nickname': my_full_nickname, 'temp_nick': temp_nick, 'warns': warn_match.group(6)})
-                return
-
-            kick_pattern = (
-                r'㰳\s+(\S+)\s+(\S+)\s+(' + escaped_nick + r')' + tag_tail +
-                r'\s+кикнул\s+игрока\s+(\S+)(?:\s+┃\s+(\S+))?.*причине:\s+(.+)'
-            )
-            kick_match = re.search(kick_pattern, line)
-            if kick_match:
-                temp_nick = kick_match.group(4) + ' ┃ ' + '<code>' + kick_match.group(5) + '</code>' if kick_match.group(5) else '<code>' + kick_match.group(4) + '</code>'
-                my_full_nickname = kick_match.group(1) + ' ' + kick_match.group(2) + ' ' + '<code>' + kick_match.group(3) + '</code>'
-                previous_sender = line
-                current_date = datetime.datetime.now(get_localzone()).strftime("%d.%m.%Y")
-                time_match = re.search(r'\[(\d{2}:\d{2}:\d{2})', line)
-                timesi = time_match.group(1) if time_match else "00:00:00"
-                last_time = add_timezone_to_str(timesi)
-                self._add_to_queue('kick', {'my_full_nickname': my_full_nickname, 'temp_nick': temp_nick, 'warns': kick_match.group(6), 'current_date': current_date, 'last_time': last_time})
-                return
+            previous_sender = line
+            self.ops.enqueue(event)
         except Exception as e:
             self.log_message(f"[ERROR] Ошибка при обработке строки '{line}': {e}")
 
-    def _add_to_queue(self, ot, data):
-        with self.operation_lock:
-            self.operation_queue.append({'type': ot, 'data': data, 'timestamp': datetime.datetime.now()})
-        if self.current_operation is None:
-            self._process_next_operation()
-
-    def _process_next_operation(self):
-        with self.operation_lock:
-            if not self.operation_queue or self.current_operation is not None:
-                return
-            self.current_operation = self.operation_queue.pop(0)
-        if self.current_operation:
-            op = self.current_operation
-            QTimer.singleShot(int(self.processing_delay * 1000), lambda: self._start_operation(op))
-
-    def _start_operation(self, op):
-        try:
-            if op['type'] == 'mute':
-                self.mute_thread = MuteActionsThread(op['data']['line'], op['data']['my_full_nickname'], op['data']['temp_nick'], op['data']['warns'])
-                self.mute_thread.finished_signal.connect(self._on_mute_finished)
-                self.mute_thread.start()
-            elif op['type'] == 'warn':
-                self.warn_thread = WarnActionsThread(op['data']['line'], op['data']['my_full_nickname'], op['data']['temp_nick'], op['data']['warns'])
-                self.warn_thread.finished_signal.connect(self._on_warn_finished)
-                self.warn_thread.start()
-            elif op['type'] == 'kick':
-                self.kick_thread = KickActionsThread(op['data']['my_full_nickname'], op['data']['temp_nick'], op['data']['warns'], op['data']['current_date'], op['data']['last_time'])
-                self.kick_thread.finished_signal.connect(self._on_kick_finished)
-                self.kick_thread.start()
-        except Exception as e:
-            self.log_message(f"[ERROR] Ошибка при запуске операции {op['type']}: {e}")
-            self._on_operation_completed()
-
-    def _on_mute_finished(self, *args):
-        global all_mutes, platform, vk_user_id
-        all_mutes += 1
-        self.update_stats()
-        if using_sounds_in_program:
-            self.sound_requested.emit()
-        self.message_sender = MessageSenderThread('mute', platform, vk_user_id, *args)
-        self.message_sender.finished_signal.connect(lambda s, m: self._on_message_sent(s, m, 'mute'))
-        self.message_sender.start()
-
-    def _on_warn_finished(self, *args):
-        global all_warns, platform, vk_user_id
-        all_warns += 1
-        self.update_stats()
-        if using_sounds_in_program:
-            self.sound_requested.emit()
-        self.message_sender = MessageSenderThread('warn', platform, vk_user_id, *args)
-        self.message_sender.finished_signal.connect(lambda s, m: self._on_message_sent(s, m, 'warn'))
-        self.message_sender.start()
-
-    def _on_kick_finished(self, *args):
-        global all_kicks, platform, vk_user_id
-        all_kicks += 1
-        self.update_stats()
-        self.message_sender = MessageSenderThread('kick', platform, vk_user_id, *args)
-        self.message_sender.finished_signal.connect(lambda s, m: self._on_message_sent(s, m, 'kick'))
-        self.message_sender.start()
-
-    def _on_message_sent(self, success, message, operation_type):
-        self.log_message(message)
-        if not success:
-            gui_print(f"[WARNING] Отправка {operation_type} завершилась с ошибкой")
-        self._on_operation_completed()
-
-    def _on_operation_completed(self):
-        self.current_operation = None
-        QTimer.singleShot(500, self._process_next_operation)
-
     def take_screenshot(self, e=None):
-        if hasattr(self, 'screenshot_thread') and self.screenshot_thread.isRunning():
+        # CaptureThread presses 't' for mute/warn — ignore hotkey during op.
+        if getattr(self, 'ops', None) is not None and self.ops.is_busy:
+            return
+        if self._screenshot_busy or (
+            hasattr(self, 'screenshot_thread') and self.screenshot_thread is not None
+            and self.screenshot_thread.isRunning()
+        ):
             gui_print("[SYSTEM] Предыдущий скриншот ещё обрабатывается...")
             return
+
+        self._screenshot_busy = True
         self.screenshot_thread = ScreenshotThread()
-        self.screenshot_thread.finished_signal.connect(self._on_screenshot_created)
+        self.screenshot_thread.finished_signal.connect(
+            self._on_screenshot_created, Qt.UniqueConnection
+        )
         self.screenshot_thread.start()
 
     def _on_screenshot_created(self, success, message, filename):
@@ -648,12 +460,17 @@ del "%~f0"
         if success and filename:
             self._load_platform()
             self.message_sender = MessageSenderThread('screenshot', platform, filename)
-            self.message_sender.finished_signal.connect(self._on_screenshot_sent)
+            self.message_sender.finished_signal.connect(
+                self._on_screenshot_sent, Qt.UniqueConnection
+            )
             self.message_sender.start()
             if using_sounds_in_program:
                 self.sound_requested.emit()
+        else:
+            self._screenshot_busy = False
 
     def _on_screenshot_sent(self, success, message):
+        self._screenshot_busy = False
         self.log_message(message)
 
     def _start_binding(self):
@@ -674,12 +491,10 @@ del "%~f0"
                 self.current_bind_keycode = key
                 key_name = self._get_key_name(key)
                 try:
-                    with open(data_path('binds.txt'), 'w') as f:
-                        f.write(str(key))
+                    update_settings(bind_keycode=int(key))
                 except Exception as e:
                     gui_print(f"[ERROR] Ошибка сохранения бинда: {e}")
                 self.bind_label.setText(f"Текущий бинд: {key_name}")
-                self._setup_global_shortcut()
                 gui_print(f"[SYSTEM] Бинд установлен: {key_name}")
             self.setting_bind_mode = False
             self.bind_btn.setText("Изменить бинд скриншота")
@@ -692,13 +507,13 @@ del "%~f0"
 
     def _load_bind(self):
         try:
-            with open(data_path('binds.txt'), 'r') as f:
-                saved_key = int(f.read().strip())
-            self.current_bind_keycode = saved_key
-            self.bind_label.setText(f"Текущий бинд: {self._get_key_name(saved_key)}")
+            saved_key = load_settings().bind_keycode
+            if saved_key is None:
+                self.bind_label.setText("Текущий бинд: Не задан")
+                return
+            self.current_bind_keycode = int(saved_key)
+            self.bind_label.setText(f"Текущий бинд: {self._get_key_name(self.current_bind_keycode)}")
             self._setup_global_shortcut()
-        except FileNotFoundError:
-            self.bind_label.setText("Текущий бинд: Не задан")
         except Exception as e:
             self.bind_label.setText("Текущий бинд: Ошибка загрузки")
             gui_print(f"[ERROR] Ошибка загрузки бинда: {e}")
@@ -706,19 +521,65 @@ del "%~f0"
     def _setup_global_shortcut(self):
         import pynput.keyboard as pynput_kb
         try:
-            if self.keyboard_listener:
-                self.keyboard_listener.stop()
-            if self.current_bind_keycode is not None:
-                pynput_key = self._qt_key_to_pynput(self.current_bind_keycode)
-                if pynput_key:
-                    def on_press(key):
-                        try:
-                            if key == pynput_key:
-                                QTimer.singleShot(0, self.take_screenshot)
-                        except Exception:
-                            pass
-                    self.keyboard_listener = pynput_kb.Listener(on_press=on_press, suppress=False)
-                    self.keyboard_listener.start()
+            if self.keyboard_listener is not None:
+                try:
+                    self.keyboard_listener.stop()
+                except Exception:
+                    pass
+                self.keyboard_listener = None
+
+            self._hotkey_held = False
+            self._hotkey_shot_armed = True
+
+            if self.current_bind_keycode is None:
+                return
+
+            pynput_key = self._qt_key_to_pynput(self.current_bind_keycode)
+            if not pynput_key:
+                return
+
+            def _keys_match(key) -> bool:
+                try:
+                    if key == pynput_key:
+                        return True
+                    # Windows may emit both KeyCode(char=...) and vk variants.
+                    if hasattr(key, 'vk') and hasattr(pynput_key, 'vk'):
+                        if key.vk is not None and key.vk == pynput_key.vk:
+                            return True
+                    if hasattr(key, 'char') and hasattr(pynput_key, 'char'):
+                        if key.char and pynput_key.char and key.char.lower() == pynput_key.char.lower():
+                            return True
+                except Exception:
+                    return False
+                return False
+
+            def on_press(key):
+                try:
+                    if not _keys_match(key):
+                        return
+                    # Key-repeat while held must not queue more screenshots.
+                    if self._hotkey_held or not self._hotkey_shot_armed:
+                        return
+                    self._hotkey_held = True
+                    self._hotkey_shot_armed = False
+                    QTimer.singleShot(0, self.take_screenshot)
+                except Exception:
+                    pass
+
+            def on_release(key):
+                try:
+                    if _keys_match(key):
+                        self._hotkey_held = False
+                        self._hotkey_shot_armed = True
+                except Exception:
+                    pass
+
+            self.keyboard_listener = pynput_kb.Listener(
+                on_press=on_press,
+                on_release=on_release,
+                suppress=False,
+            )
+            self.keyboard_listener.start()
         except Exception as e:
             gui_print(f"[ERROR] Ошибка настройки горячей клавиши: {e}")
 
@@ -774,19 +635,20 @@ del "%~f0"
     def _play_sound(self):
         make_sound()
 
-    def closeEvent(self, event):
+    def shutdown(self):
         try:
             if hasattr(self, 'session_timer'):
                 self.session_timer.stop()
             if hasattr(self, 'log_monitor'):
                 self.log_monitor.stop()
+            if hasattr(self, 'ops'):
+                self.ops.stop()
             if hasattr(self, 'message_sender'):
                 self.message_sender.stop()
-            for attr in ['mute_thread', 'warn_thread', 'kick_thread', 'screenshot_thread', 'download_thread']:
+            for attr in ['screenshot_thread', 'download_thread']:
                 if hasattr(self, attr) and getattr(self, attr) is not None:
                     getattr(self, attr).quit()
             if hasattr(self, 'keyboard_listener') and self.keyboard_listener:
                 self.keyboard_listener.stop()
         except Exception as e:
             gui_print(f"[ERROR] Ошибка при закрытии: {e}")
-        event.accept()
